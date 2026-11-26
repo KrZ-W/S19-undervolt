@@ -134,6 +134,11 @@ func manualRestoreW() int { wizMu.Lock(); defer wizMu.Unlock(); return wiz.Manua
 // recorded BEFORE the request (a failed reply may still have switched the miner), then the mode is read back.
 func setManualMode(mhz, volt float64, restoreW int) error {
 	wizSet(func(s *wizState) { s.ManualRestore = restoreW })
+	if raw, err := bos("GET", perfModePath, nil); err == nil && modeIsManual(raw) &&
+		math.Abs(num(raw, "manualmode", "global_frequency", "hertz")/1e6-mhz) < 1 {
+		note("fixed profile: already in manual mode at %.0f MHz - no switch (no bosminer restart)", mhz)
+		return nil
+	}
 	if _, err := bos("PUT", perfModePath, manualModeBody(mhz, volt)); err != nil {
 		return fmt.Errorf("manual mode refused: %w", err)
 	}
@@ -189,8 +194,20 @@ func restoreAfterRestart() {
 		return
 	}
 	waitFor(4*time.Minute, 10*time.Second, func() bool { return read().ok })
-	leaveManual()
+	// a resume within restoreGrace re-enters the test profile anyway: switching to the tuner and back would cost
+	// two bosminer restarts for nothing. The wizard owns the mode while it runs.
+	for t0 := time.Now(); time.Since(t0) < restoreGrace; time.Sleep(5 * time.Second) {
+		if wizRunning() {
+			return
+		}
+	}
+	if !wizRunning() {
+		leaveManual()
+	}
 }
+
+// restoreGrace: how long s19volt waits after a restart in the test profile before putting the tuner back.
+const restoreGrace = 3 * time.Minute
 
 // fixedSettled: after the switch to the fixed profile, the chips run at (nearly) the profile clock and bosminer has
 // not moved the PSU voltage for 45 s.

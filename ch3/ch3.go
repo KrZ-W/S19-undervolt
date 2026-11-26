@@ -6,12 +6,9 @@
 //   - the pin is found BY ADDRESS (Linux GPIO numbers shift between kernels), and only on the tested
 //     layout: reset block /amba_pl/gpio@41210000, 5 bits, boot default 0x10 (all resets LOW at boot);
 //   - refuse if plug-detect says a board is in the 4th connector (the pin is then a real reset line);
-//   - the PWM writes the GPIO data register directly (/dev/mem, one read-modify-write of bit 3 per edge;
-//     sysfs took ~100 us per edge). The other bits are the boards' reset lines, driven by bosminer through
-//     the kernel: the PWM writes only on duty changes and edges, never while it sits at 0 %, so it is idle
-//     whenever bosminer (re)starts boards; the kernel's own writes can only drop bit 3 for one edge;
-//   - timing uses clock_nanosleep to absolute edge times (Go's time.Sleep cannot sleep below ~1.25 ms
-//     here, which turned the 1 kHz PWM into a ~400 Hz one with a duty set by rounding: 2026-11-25);
+//   - writes go through sysfs only (the kernel keeps a shadow register and serialises writes; the register
+//     also holds the boards' reset lines and the kernel's heartbeat LED: direct /dev/mem writes were tried on
+//     2026-11-25 and froze bosminer's chain monitor - never write it directly);
 //   - LOW = LED dark = stock voltage: Open starts low, Close ends low, glides never jump.
 package ch3
 
@@ -25,7 +22,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -36,7 +32,6 @@ const (
 	plugLabel  = "/amba_pl/gpio@41200000"
 	dtDir      = "/proc/device-tree/amba_pl/gpio@41210000/"
 	bit        = 3 // 4th connector
-	regBase    = 0x41210000
 )
 
 // Pin describes the detected 4th-connector reset line.
@@ -113,8 +108,6 @@ type PWM struct {
 	target  float64
 	applied float64
 	f       *os.File
-	reg     *uint32 // the GPIO data register (direct writes); nil = sysfs fallback
-	mem     []byte
 	stop    chan struct{}
 	done    chan struct{}
 
@@ -144,61 +137,15 @@ func Open(hz int) (*PWM, Pin, error) {
 		return nil, p, err
 	}
 	d := &PWM{Hz: hz, GlideRate: 10, f: f, stop: make(chan struct{}), done: make(chan struct{})}
-	d.mapReg()
 	go d.loop()
 	return d, p, nil
 }
 
-// mapReg maps the reset-GPIO data register (AXI GPIO GPIO_DATA at offset 0) for direct writes.
-func (d *PWM) mapReg() {
-	m, err := os.OpenFile("/dev/mem", os.O_RDWR|syscall.O_SYNC, 0)
-	if err != nil {
-		return
-	}
-	defer m.Close()
-	b, err := syscall.Mmap(int(m.Fd()), regBase, 4096, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
-	if err != nil {
-		return
-	}
-	d.mem, d.reg = b, (*uint32)(unsafe.Pointer(&b[0]))
-}
-
-// write sets the pin: one read-modify-write of bit 3 (atomic: the compiler may not merge or reorder it).
 func (d *PWM) write(on bool) {
-	if d.reg != nil {
-		v := atomic.LoadUint32(d.reg)
-		if on {
-			v |= 1 << bit
-		} else {
-			v &^= 1 << bit
-		}
-		atomic.StoreUint32(d.reg, v)
-		return
-	}
 	if on {
 		d.f.WriteAt([]byte("1"), 0)
 	} else {
 		d.f.WriteAt([]byte("0"), 0)
-	}
-}
-
-// Direct reports whether the PWM writes the register directly (false = sysfs fallback).
-func (d *PWM) Direct() bool { return d.reg != nil }
-
-// monoNs: CLOCK_MONOTONIC in ns; sleepUntil: clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME) to t.
-func monoNs() int64 {
-	var ts syscall.Timespec
-	syscall.Syscall(syscall.SYS_CLOCK_GETTIME, 1, uintptr(unsafe.Pointer(&ts)), 0)
-	return ts.Nano()
-}
-
-func sleepUntil(t int64) {
-	ts := syscall.NsecToTimespec(t)
-	for {
-		_, _, e := syscall.Syscall6(syscall.SYS_CLOCK_NANOSLEEP, 1, 1 /* TIMER_ABSTIME */, uintptr(unsafe.Pointer(&ts)), 0, 0, 0)
-		if e != syscall.EINTR {
-			return
-		}
 	}
 }
 
@@ -210,8 +157,7 @@ func (d *PWM) Set(pct float64) {
 }
 
 // SetNow sets the drive at once, without the glide: used right before bosminer stops or restarts (the
-// boards are about to lose power), so the loop is already quiet (0 % writes nothing) when bosminer drives the
-// other bits of the register (the boards' reset lines).
+// boards are about to lose power).
 func (d *PWM) SetNow(pct float64) {
 	d.mu.Lock()
 	d.target = math.Max(0, math.Min(100, pct))
@@ -233,11 +179,10 @@ func (d *PWM) loop() {
 	d.rt = setRealtime(rtPriority)
 	d.mu.Unlock()
 
-	period := int64(time.Second) / int64(d.Hz)
-	step := d.GlideRate * float64(period) / 1e9
-	next := monoNs()
-	d.stAt = time.Now()
-	lastOn := -1 // pin state last written (-1 unknown): at 0 % / 100 % nothing is written after the first time
+	period := time.Second / time.Duration(d.Hz)
+	step := d.GlideRate * period.Seconds()
+	next := time.Now()
+	d.stAt = next
 	for {
 		select {
 		case <-d.stop:
@@ -253,43 +198,28 @@ func (d *PWM) loop() {
 		}
 		a := d.applied
 		d.mu.Unlock()
-		on := int64(float64(period) * a / 100)
-		cycle := next
-		var high int64
-		switch {
-		case on <= 0:
-			if lastOn != 0 {
-				d.write(false)
-				lastOn = 0
-			}
-			next += period
-			sleepUntil(next)
-		case on >= period:
-			if lastOn != 1 {
-				d.write(true)
-				lastOn = 1
-			}
-			high = period
-			next += period
-			sleepUntil(next)
-		default:
-			d.late(time.Duration(monoNs() - next))
+		on := time.Duration(float64(period) * a / 100)
+		var high time.Duration
+		if on > 0 {
+			t0 := time.Now()
+			d.late(t0.Sub(next))
 			d.write(true)
-			t0 := monoNs()
-			next += on
-			sleepUntil(next)
-			d.late(time.Duration(monoNs() - next))
-			d.write(false)
-			high = monoNs() - t0
-			lastOn = 0
-			next += period - on
-			sleepUntil(next)
+			next = next.Add(on)
+			time.Sleep(time.Until(next))
+			high = time.Since(t0)
 		}
-		d.account(time.Duration(high), time.Duration(monoNs()-cycle))
+		if on < period {
+			t1 := time.Now()
+			d.late(t1.Sub(next))
+			d.write(false)
+			next = next.Add(period - on)
+			time.Sleep(time.Until(next))
+		}
+		d.account(high, period)
 		// Fell behind by more than one cycle (system stall): resynchronise. Racing through the missed cycles
 		// back to back would put wrong-duty cycles on the pin.
-		if monoNs()-next > period {
-			next = monoNs()
+		if time.Until(next) < -period {
+			next = time.Now()
 		}
 	}
 }

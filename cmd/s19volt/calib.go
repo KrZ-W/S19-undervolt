@@ -16,7 +16,7 @@ package main
 //
 // Runs only when the core is idle (no level change in progress) and holds the core's phase as
 // "calibrate"; while it runs outside control is refused and the core's loops stand down (guard.go).
-// Every trim move is at most the setup pace (5 % per 10 s). Results: /etc/s19volt/calib/.
+// Every trim move is at most the setup pace (5 % per 2 s). Results: /etc/s19volt/calib/.
 
 import (
 	"encoding/json"
@@ -123,7 +123,7 @@ func runSweep(c calRun) {
 		if c.DropTrim { // the wizard restarts bosminer right after (tuner mode back): trim 0 at once, no glide
 			trimOffNow()
 		} else {
-			glideZero() // back to stock voltage at the setup pace (5 % per 10 s)
+			glideZero() // back to stock voltage at the setup pace (5 % per 2 s)
 		}
 		calSet(func(x *calRun) { x.Running, x.Status, x.Ended = false, status, time.Now().Unix() })
 		snap := calSnapshot()

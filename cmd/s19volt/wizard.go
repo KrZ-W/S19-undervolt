@@ -27,7 +27,7 @@ package main
 // Fans: the core's fan rule (core.go fanRule) drives them LIVE during the whole run, between 15 % and the user's
 // maximum, so chips run at production-like temperature; a level's fan = the rule's fan when the level finishes.
 // While a setup runs, outside control is refused and the core's other loops stand down (guard.go).
-// Every trim move under load glides 5 % per 10 s (core.go glide); a soft reset sets trim 0 directly at the moment
+// Every trim move under load glides 5 % per 2 s (core.go glide); a soft reset sets trim 0 directly at the moment
 // bosminer cuts the board power. A board below 60 % of its baseline rate ends a descent or aborts a hold.
 // Without a power meter, efficiency is ESTIMATED as bosminer's power target × (V / V_stock)² — dynamic
 // chip power scales with V². The estimate ranks voltages and board counts; it is not a wall reading.
@@ -1329,7 +1329,8 @@ func wizRun(in wizInputs, resume, redoPrep bool) {
 		if fx.Fallback != "" {
 			label = fmt.Sprintf("Braiins' tune at %d W (fallback)", testW)
 		}
-		wizLive("trim sweep 0-100 %% in %.0f %% steps, %.0f s settle each (%s)", sweepStep, sweepSettle, label)
+		wizLive("trim sweep 0-100 %% in %.0f %% steps, %.0f s each (%.0f s settle + %.0f s averaged) (%s)", sweepStep,
+			sweepSettle+1.5*float64(sweepReads-1), sweepSettle, 1.5*float64(sweepReads-1), label)
 		wizEvent("sweep", "trim sweep 0-100 %% in %.0f %% steps on the %s", sweepStep, label)
 		onMod := func(stock, v, d float64) {
 			msg := modText(stock, v, d)
@@ -2334,7 +2335,7 @@ func searchLevel(lv wizLevel, in wizInputs, curves []wizCurve, upd func(func(*wi
 		l.Note = fmt.Sprintf("power target raised to Braiins' minimum %d W", mt)
 	}
 	upd(func(x *wizLevel) { *x = l })
-	if chip0 > in.ChipTarget+9 && fanNow(0) >= in.MaxFan { // stock is hotter than trimmed: a little more allowed
+	if chip0 > tooHotLine(in.ChipTarget, braiinsHotTemp()) && fanNow(0) >= in.MaxFan { // stock runs hotter than trimmed (+9), capped below Braiins' hot_temp
 		l.Status, l.Note = "too_hot", fmt.Sprintf("chips %.0f °C at stock with fans at %d %%", chip0, in.MaxFan)
 		return l, nil
 	}

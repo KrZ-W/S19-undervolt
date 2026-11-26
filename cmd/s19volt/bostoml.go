@@ -138,3 +138,41 @@ func configuredTarget() int {
 	}
 	return parseModeTarget(raw)
 }
+
+// tomlSectionValue returns the raw value of key in [section] of src ("" when missing).
+func tomlSectionValue(src, section, key string) string {
+	in := false
+	for _, line := range strings.Split(src, "\n") {
+		if isTomlHeader(line) {
+			in = strings.TrimSpace(line) == "["+section+"]"
+			continue
+		}
+		if in && tomlKey(line) == key {
+			return tomlValue(line)
+		}
+	}
+	return ""
+}
+
+// braiinsHotTemp: [temp_control] hot_temp from bosminer.toml (Braiins runs the fans at full speed above it); 0 = unknown.
+func braiinsHotTemp() float64 {
+	b, err := os.ReadFile(bosTomlFile)
+	if err != nil {
+		return 0
+	}
+	v, err := strconv.ParseFloat(strings.Trim(tomlSectionValue(string(b), "temp_control", "hot_temp"), "\" "), 64)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+// tooHotLine: the stock-baseline chip temperature above which a level is too hot: the chip target + 9 (stock runs
+// hotter than trimmed), but never at or above Braiins' hot_temp (it would run the fans at full speed first): -2.
+func tooHotLine(chipTarget, hot float64) float64 {
+	l := chipTarget + 9
+	if hot > 0 && l > hot-2 {
+		l = hot - 2
+	}
+	return l
+}

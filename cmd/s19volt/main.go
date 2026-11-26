@@ -423,8 +423,10 @@ func main() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 		<-sig
-		closeTrimDriver() // glides toward 0 % for at most a minute, then forces the pin LOW
-		leaveManual()     // never leave the wizard's manual test profile on (best effort; retried at the next start)
+		closeTrimDriver()  // glides toward 0 % for at most a minute, then forces the pin LOW
+		if !wizRunning() { // a run in progress keeps its test profile: the next start resumes it or, if no resume
+			leaveManual() // comes within restoreGrace, puts the tuner back (no tuner<->manual double switch on a deploy)
+		}
 		os.Exit(0)
 	}()
 	setupCore(*coreCfg) // power changes, trim loop, fan rule, chip-temperature cap (2026-11-24)

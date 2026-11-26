@@ -311,10 +311,11 @@ func trimOffNow() {
 	}
 }
 
-// setup trim pace: every wizard / calibration move glides 5 % per 10 s, both directions
+// setup trim pace: every wizard / calibration / level-change move glides 5 % per 2 s, both directions (was 10 s;
+// the 470 uF capacitor already turns any drive step into a ~2 s voltage glide, and the glide keeps its 60 % board check)
 const (
 	paceStep  = 5.0
-	paceDelay = 10 * time.Second
+	paceDelay = 2 * time.Second
 )
 
 var errAborted = errors.New("aborted")

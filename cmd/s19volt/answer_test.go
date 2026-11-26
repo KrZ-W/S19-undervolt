@@ -136,8 +136,8 @@ func TestPace(t *testing.T) {
 	if nextTrim(52, 0, 5) != 47 || nextTrim(3, 0, 5) != 0 || nextTrim(48, 50, 5) != 50 {
 		t.Fatal("nextTrim clamps at the target")
 	}
-	if paceStep/paceDelay.Seconds() != 0.5 {
-		t.Fatal("setup pace must be 5 % per 10 s")
+	if paceStep/paceDelay.Seconds() != 2.5 {
+		t.Fatal("setup pace must be 5 % per 2 s")
 	}
 }
 

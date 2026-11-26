@@ -114,3 +114,13 @@ func TestWriteAutotuneTarget(t *testing.T) {
 		t.Fatal("file changed on refusal")
 	}
 }
+
+func TestTooHotLine(t *testing.T) {
+	if tooHotLine(74, 82) != 80 || tooHotLine(74, 0) != 83 || tooHotLine(70, 95) != 79 {
+		t.Fatal("tooHotLine")
+	}
+	src := "[temp_control]\nmode = \"manual\"\nhot_temp = 82.0\ndangerous_temp = 95.0\n[fan_control]\nhot_temp = 1\n"
+	if tomlSectionValue(src, "temp_control", "hot_temp") != "82.0" {
+		t.Fatal("tomlSectionValue")
+	}
+}
