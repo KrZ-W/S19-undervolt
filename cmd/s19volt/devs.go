@@ -2,9 +2,15 @@ package main
 
 // devs.go — exact window hashrate from bosminer's cgminer-compatible API (stock Braiins OS+): 127.0.0.1:4028,
 // {"command":"devs"} -> DEVS[] per board with "Total MH" (cumulative MH since bosminer started) and "Device Elapsed"
-// (s). A window's per-board rate = (TotalMH_end - TotalMH_start) / the wall time between the two reads: the exact
+// (s). A window's per-board rate = the work done between the two reads / the wall time between them: the exact
 // average over the window, not a mean of 1-min readings. One helper (exactRates) for the stock baseline, every hold
 // and the latch windows. Port 4028 unavailable -> the board rates (API last_1m mean) as before, logged once.
+//
+// The work counter is "Diff1 Work" (one count = 2^40 hashes), not "Total MH": measured 2026-11-26 on bosminer 26.11,
+// Total MH advances in lumps of ~25 s of a board's work (30-s deltas of 0 / 20 / 38 / 57 TH/s on a 24 TH/s board),
+// so a 5-min window holds only ~12 lumps per board: +-30 % per board, +-10-15 % on the total (it read a 1600 W hold
+// at 71 TH/s against a real 63). Diff1 Work advances ~1300 counts/min/board, evenly: ~+-1 % per board over 5 min.
+// Total MH stays the fallback for a reply without Diff1 Work.
 
 import (
 	"bytes"
@@ -40,7 +46,13 @@ type devEntry struct {
 	id      string
 	enabled bool
 	mh, el  float64 // Total MH, Device Elapsed (s)
+	d1      float64 // Diff1 Work (counts of diff1Hashes); hasD1 = the reply carried it
+	hasD1   bool
 }
+
+// diff1Hashes: hashes per "Diff1 Work" count (bosminer 26.11: cumulative Total MH / Diff1 Work = 2^39.9-2^40.1 per
+// board after 80 min, the spread being Total MH's lumps).
+const diff1Hashes = 1 << 40
 
 // devsSnap: one devs reply and when it was read (ok = parsed).
 type devsSnap struct {
@@ -77,6 +89,7 @@ func parseDevs(raw []byte, at time.Time) devsSnap {
 		asc, _ := f(d, "ASC")
 		id, hasID := f(d, "ID")
 		e := devEntry{asc: int(asc), enabled: true, mh: mh, el: el}
+		e.d1, e.hasD1 = f(d, "Diff1 Work")
 		if hasID {
 			e.id = strconv.Itoa(int(id))
 		}
@@ -186,15 +199,20 @@ func exactRates(a, b devsSnap, fb map[string]float64, fbTot float64) (map[string
 		devsNote(why)
 		return fb, fbTot, "boards", nil
 	}
+	for _, bd := range boards { // a restart under the window on any board first: the window is invalid
+		if mb[bd].mh < ma[bd].mh || mb[bd].el < ma[bd].el || (mb[bd].hasD1 && ma[bd].hasD1 && mb[bd].d1 < ma[bd].d1) {
+			return fb, fbTot, "boards", errCounterReset{bd}
+		}
+	}
 	out, tot := map[string]float64{}, 0.0
 	for _, bd := range boards {
 		d := mb[bd].mh - ma[bd].mh
-		if d < 0 || mb[bd].el < ma[bd].el {
-			return fb, fbTot, "boards", errCounterReset{bd}
+		if mb[bd].hasD1 && ma[bd].hasD1 { // the smooth counter (see the file comment)
+			d = (mb[bd].d1 - ma[bd].d1) * diff1Hashes / 1e6
 		}
 		th := d / dt / 1e6
 		if fb[bd] > 1 && (th < 0.75*fb[bd] || th > 1.33*fb[bd]) { // a wrong board mapping or unit, not a real gap
-			devsNote("a board's Total MH rate is more than 25 % off its board rate (board mapping or unit?)")
+			devsNote("a board's counter rate is more than 25 % off its board rate (board mapping or unit?)")
 			return fb, fbTot, "boards", nil
 		}
 		out[bd] = math.Round(th*1000) / 1000

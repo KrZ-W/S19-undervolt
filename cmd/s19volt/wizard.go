@@ -480,7 +480,7 @@ var lastChips map[string][]float64
 var lastFreqs map[string][]float64 // chip clocks (MHz) at the end of the last avgRates window
 var lastChipSrc string             // "shares" | "hashrate" | "" (no per-chip data)
 var lastDevs [2]devsSnap           // the devs reads at the start and the end of the last avgRates window
-var lastRateSrc string             // "devs" (Total MH) | "boards" (API 1-min mean): the last window's TH/s
+var lastRateSrc string             // "devs" (Diff1 Work, else Total MH) | "boards" (API 1-min mean): the last window's TH/s
 
 // errBoardDrop: a board fell below 60 % of its stock rate during a hold (the hold is aborted, the step failed).
 type errBoardDrop struct {
@@ -837,6 +837,7 @@ func cleanApply(fan, gateTarget int, off time.Duration, act func() error) (err e
 	if act != nil {
 		actErr = act()
 	}
+	lowerTunesNote()    // bosminer is stopped: any tune Braiins saved since is set to 90 % (profile.go)
 	if !wizSleep(off) { // stopped while the boards are off: bosminer back on and resumed before returning
 		_ = exec.Command("/etc/init.d/bosminer", "start").Run()
 		waitUp(4*time.Minute, 10*time.Second, func() bool { return read().ok })
@@ -1508,6 +1509,12 @@ func wizRun(in wizInputs, resume, redoPrep bool) {
 			note("wizard: board ranking (strongest first at low voltage): %v", rk)
 		}
 		remain()
+	}
+	// the last level's tune was saved after the last soft reset: one more reset sets it to 90 % (profile.go)
+	if tunesPending() && !stopRequested() {
+		if err := cleanApply(0, configuredTarget(), cleanOff, nil); err != nil {
+			note("wizard: final reset for the stored hashrate: %v", err)
+		}
 	}
 	// final pass: board-count pick + voltage rising with power; notes on the affected rows (resume.go)
 	wizSet(func(s *wizState) { s.FinalCheck = finalCheck(s.Levels) })
@@ -2878,5 +2885,19 @@ func handleWizard(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, map[string]interface{}{"ok": true, "levels": n})
 	default:
 		bad("action must be start, resume, extend, clear_levels, clear_all, stop, listen or apply")
+	}
+}
+
+// lowerTunesNote: lowerStoredHashrate, logged (bosminer stopped). An error is only noted: the run goes on.
+func lowerTunesNote() {
+	ks, err := lowerStoredHashrate()
+	if err != nil {
+		note("saved Braiins tunes: setting the stored hashrate to 90 %% failed: %v", err)
+	} else if len(ks) > 0 {
+		short := make([]string, len(ks))
+		for i, k := range ks {
+			short[i] = strings.SplitN(k, "-", 2)[0]
+		}
+		note("saved Braiins tunes: stored hashrate set to 90 %% for %s (Braiins stays out of the trim's way)", strings.Join(short, ", "))
 	}
 }

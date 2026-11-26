@@ -161,3 +161,51 @@ func TestSummarizeBaselineStock(t *testing.T) {
 		t.Fatalf("chips: %v %s", lastChips["1"][:1], lastChipSrc)
 	}
 }
+
+// devsReplyD1: like devsReply, with "Diff1 Work" per board (d1) next to Total MH (mh).
+func devsReplyD1(el []int, mh, d1 []float64) []byte {
+	s := `{"STATUS":[{"STATUS":"S","Msg":"3 ASC(s)"}],"DEVS":[`
+	for i := range mh {
+		if i > 0 {
+			s += ","
+		}
+		s += fmt.Sprintf(`{"ASC":%d,"Name":"","ID":%d,"Enabled":"Y","Status":"Alive","Total MH":%v,"Diff1 Work":%v,"Device Elapsed":%d}`,
+			i, i+1, mh[i], d1[i], el[i])
+	}
+	return []byte(s + `],"id":1}`)
+}
+
+// Two real reads 30 s apart (S19, 2000 W, 2026-11-26): Total MH says 56.9 / 19.9 / 58.0 TH/s (its lumps), Diff1
+// Work says ~23.9 / 23.0 / 24.3 TH/s, in line with bosminer's own 1-min rates (24.4 / 23.7 / 24.8). The window must
+// use Diff1 Work.
+func TestExactRatesDiff1RealLumps(t *testing.T) {
+	t0 := time.Unix(1795700914, 0)
+	a := parseDevs(devsReplyD1([]int{4957, 4956, 4954},
+		[]float64{118316247241.7198, 101295807243.74733, 108781282405.64633}, []float64{100464, 98169, 99190}), t0)
+	b := parseDevs(devsReplyD1([]int{4987, 4986, 4984},
+		[]float64{120022689288.02815, 101893941569.25746, 110522908824.04352}, []float64{101114, 98798, 99852}),
+		t0.Add(30*time.Second))
+	fb := map[string]float64{"1": 24.4, "2": 23.7, "3": 24.8}
+	rates, tot, src, err := exactRates(a, b, fb, 72.9)
+	if err != nil || src != "devs" {
+		t.Fatalf("src %s err %v", src, err)
+	}
+	for bd, want := range map[string]float64{"1": 23.82, "2": 23.05, "3": 24.27} {
+		if d := rates[bd] - want; d > 0.05 || d < -0.05 {
+			t.Fatalf("board %s: %.3f want %.2f (%v)", bd, rates[bd], want, rates)
+		}
+	}
+	if tot < 71 || tot > 71.3 {
+		t.Fatalf("total %.3f", tot)
+	}
+}
+
+// Diff1 Work going backwards = bosminer restarted under the window, like Total MH.
+func TestExactRatesDiff1Reset(t *testing.T) {
+	t0 := time.Unix(1e9, 0)
+	a := parseDevs(devsReplyD1([]int{5000, 5000, 5000}, []float64{1e12, 1e12, 1e12}, []float64{9e4, 9e4, 9e4}), t0)
+	b := parseDevs(devsReplyD1([]int{5300, 5300, 5300}, []float64{1.01e12, 1.01e12, 1.01e12}, []float64{9.6548e4, 50, 9.6548e4}), t0.Add(300*time.Second))
+	if _, _, _, err := exactRates(a, b, map[string]float64{"1": 24, "2": 24, "3": 24}, 72); !counterReset(err) {
+		t.Fatalf("diff1 backwards: %v", err)
+	}
+}

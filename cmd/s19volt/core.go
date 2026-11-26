@@ -104,6 +104,9 @@ type coreConfig struct {
 	Levels  map[string]levelEntry `json:"levels"`
 	TrimCap float64               `json:"trim_cap"`
 	MaxAmps float64               `json:"max_amps"` // never trim below watts / max_amps volts (APW12 ~250 A rating; default 200)
+	// Requested: the last /api/level request, kept across s19volt restarts (a restart used to forget it, and the
+	// miner then ran at stock voltage with the trim off until someone asked again)
+	Requested int `json:"requested,omitempty"`
 }
 
 var (
@@ -1009,7 +1012,11 @@ func handleLevel(w http.ResponseWriter, r *http.Request) {
 	}
 	coreMu.Lock()
 	requested = req.Watts
+	ccfg.Requested = req.Watts
 	coreMu.Unlock()
+	if err := saveCoreConfig(""); err != nil {
+		note("requested %d W (not saved for a restart: %v)", req.Watts, err)
+	}
 	note("requested %d W", req.Watts)
 	reconcile()
 	jsonOut(w, map[string]interface{}{"ok": true, "effective_target": floorLevel(int(math.Min(float64(req.Watts), float64(capW))))})
@@ -1037,9 +1044,14 @@ func setupCore(path string) {
 	go restoreAfterRestart() // stopped during the fixed test profile: Braiins' tuner back
 	go fanGuard()            // fans held at their speed through every bosminer stop/start (fanhold.go)
 	loadChips()
-	if r := read(); r.ok {
-		effective = r.target // whatever bosminer runs now; trim loop starts only after the core's own change
-	}
+	// Nothing counts as applied after a restart: the trim loop only runs after the core's own change, so a saved
+	// request goes through the normal apply (pause, cool, change, resume) and the trim comes back on. Before
+	// 2026-11-26 effective was bosminer's current target, so a request for the same target changed nothing and
+	// the trim stayed off.
+	effective = 0
+	coreMu.Lock()
+	requested = ccfg.Requested
+	coreMu.Unlock()
 	http.HandleFunc("/api/core", handleCore)
 	http.HandleFunc("/api/level", handleLevel)
 	http.HandleFunc("/api/calibrate", handleCalibrate)
@@ -1049,7 +1061,14 @@ func setupCore(path string) {
 	go trimLoop()
 	go fanLoop()
 	go capLoop()
-	note("core up: fan %s, cap %s, trim %s, power %s, %d levels, running %d W", ccfg.Fan, ccfg.Cap, ccfg.Trim, ccfg.Power, len(ccfg.Levels), effective)
+	bt := 0
+	if r := read(); r.ok {
+		bt = r.target
+	}
+	note("core up: fan %s, cap %s, trim %s, power %s, %d levels, bosminer at %d W, requested %d W", ccfg.Fan, ccfg.Cap, ccfg.Trim, ccfg.Power, len(ccfg.Levels), bt, requested)
+	if requested > 0 {
+		go func() { time.Sleep(20 * time.Second); reconcile() }() // the saved request, once the loops run
+	}
 }
 
 // parseModeTarget: the configured power target from GET /performance/mode
