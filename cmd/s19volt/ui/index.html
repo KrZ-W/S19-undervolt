@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>S19 Heater</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header><h1>S19 Heater</h1><span id="mstate" class="pill">…</span><span class="sub" id="upd"></span></header>
+<main>
+  <div id="banner" class="banner" hidden></div>
+  <section class="tiles">
+    <div class="tile"><div class="k">Hashrate</div><div class="v" id="t-ths">–</div><div class="s" id="t-ths5">&nbsp;</div></div>
+    <div class="tile"><div class="k">Power (est. wall)</div><div class="v" id="t-pt">–</div><div class="s" id="t-est">&nbsp;</div></div>
+    <div class="tile"><div class="k">Board voltage</div><div class="v" id="t-v">–</div><div class="s" id="t-trim">&nbsp;</div></div>
+    <div class="tile"><div class="k">Hottest chip</div><div class="v" id="t-chip">–</div><div class="s" id="t-fan">&nbsp;</div></div>
+    <div class="tile"><div class="k">Efficiency (est.)</div><div class="v" id="t-jth">–</div><div class="s">bosminer power estimate</div></div>
+  </section>
+  <section class="card"><h2>Last 24 h</h2>
+    <svg id="chart" viewBox="0 0 1000 170" preserveAspectRatio="none" aria-label="hashrate and chip temperature history"></svg>
+    <div class="legend"><span><i style="background:var(--chart)"></i>hashrate (TH/s)</span><span><i style="background:var(--chart2)"></i>hottest chip (°C)</span><span id="lg-range"></span></div>
+  </section>
+  <div class="grid2">
+    <section class="card"><h2>Hashboards</h2>
+      <table><thead><tr><th>Board</th><th>On</th><th>TH/s (5 m)</th><th>MHz</th><th>Volts</th><th>Chip °C</th><th>Board °C</th></tr></thead><tbody id="boards"></tbody></table>
+      <h2 style="margin-top:14px">Fans</h2><table><tbody id="fans"></tbody></table>
+    </section>
+    <section class="card locked" id="ctlcard"><h2>Controls</h2>
+      <div class="row" id="unlock"><input type="password" id="pw" placeholder="Password"><button id="pwbtn">Unlock</button></div>
+      <div class="ctl ctl-body">
+        <div class="row"><label>Mode</label><select id="c-mode"><option value="manual">Manual — the level is set through the API (thermostat) or here</option>
+          <option value="efficiency">Maximum efficiency (lowest J/TH level)</option><option value="max">Maximum power the cooling allows</option></select>
+          <button id="modebtn">Set</button><a href="setup.html" style="margin-left:auto">Setup / calibration →</a></div>
+        <div class="row"><label>Power</label><select id="c-power"></select><button data-act="power">Set</button></div>
+        <div class="row"><label>Boards</label><span><input type="checkbox" id="b1" checked> 1</span><span><input type="checkbox" id="b2" checked> 2</span><span><input type="checkbox" id="b3" checked> 3</span><button data-act="boards">Apply</button><span class="sub" style="color:var(--mute);font-size:12px">restarts bosminer ~1 min</span></div>
+        <div class="row"><label>Fan</label><input type="number" id="c-fan" min="15" max="100" value="25" style="width:80px"> %<button data-act="fan">Set</button></div>
+        <div class="row"><label>Trim</label><input type="number" id="c-trim" min="0" max="100" step="0.25" value="0" style="width:80px"> %<button data-act="trim">Set</button><span style="color:var(--mute);font-size:12px">0 % = stock voltage</span></div>
+        <div class="row"><label>Mining</label><button class="sec" data-act="pause">Pause</button><button class="sec" data-act="resume">Resume</button></div>
+        <div class="msg" id="msg"></div>
+      </div>
+    </section>
+  </div>
+  <section class="card locked" id="calcard"><h2>Trim calibration</h2>
+    <div class="ctl-body ctl">
+      <div style="color:var(--mute);font-size:13px">Sweeps the trim at the level the miner is running now and records board voltage per drive %.
+        Run it at a low, a mid and a high wattage. Stops at the hashing limit, then glides back to 0 % (stock).</div>
+      <div class="row"><label>Range</label><input type="number" id="k-start" value="30" step="0.25" style="width:72px"> –
+        <input type="number" id="k-stop" value="75" step="0.25" style="width:72px"> % step <input type="number" id="k-step" value="0.25" step="0.05" style="width:72px">
+        settle <input type="number" id="k-settle" value="6" style="width:60px"> s</div>
+      <div class="row"><button id="k-go">Start sweep</button><button class="sec" id="k-stopbtn">Stop</button><span class="msg" id="k-msg"></span></div>
+      <div id="k-status" style="font-size:13px"></div>
+      <svg id="k-chart" viewBox="0 0 1000 220" preserveAspectRatio="none"></svg>
+      <div class="legend"><span id="k-axis"></span></div>
+      <div class="row"><label>Saved</label><select id="k-saved"></select><button class="sec" id="k-load">Show</button></div>
+    </div>
+  </section>
+  <section class="card"><h2>Efficiency</h2>
+    <svg id="eff" viewBox="0 0 1000 220" style="height:220px"></svg>
+    <div class="legend" id="eff-legend"></div>
+  </section>
+  <section class="card"><h2>Events</h2><div class="ev" id="events"></div></section>
+</main>
+<script src="charts.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const g = (o, ...p) => p.reduce((a, k) => (a == null ? a : a[k]), o);
+const fmt = (v, d = 1) => (v == null || isNaN(v) ? '–' : Number(v).toFixed(d));
+let pw = ''; try { pw = localStorage.getItem('s19pw') || ''; } catch (e) {}
+let levelsSet = false, openUI = false;
+
+async function refresh() {
+  let s;
+  try { s = await (await fetch('api/status', { cache: 'no-store' })).json(); }
+  catch (e) { $('mstate').textContent = 'unreachable'; $('mstate').className = 'pill bad'; return; }
+  const paused = g(s, 'state', 'paused');
+  const ths1 = g(s, 'stats', 'miner_stats', 'real_hashrate', 'last_1m', 'gigahash_per_second') / 1000;
+  const ths5 = g(s, 'stats', 'miner_stats', 'real_hashrate', 'last_5m', 'gigahash_per_second') / 1000;
+  const pt = g(s, 'tuner', 'mode_state', 'powertargetmodestate', 'current_target', 'watt');
+  const est = g(s, 'tuner', 'mode_state', 'powertargetmodestate', 'profile', 'estimated_power_consumption', 'watt');
+  const chip = g(s, 'cooling', 'highest_temperature', 'temperature', 'degree_c');
+  const vb = g(s, 'volts', 'boards') || {};
+  const vOn = Object.values(vb).filter(v => v > 1);
+  const vMean = vOn.length ? vOn.reduce((a, b) => a + b, 0) / vOn.length : null;
+  $('mstate').textContent = paused ? 'paused' : (ths1 > 0.5 ? 'mining' : 'starting');
+  $('mstate').className = 'pill ' + (paused ? 'warn' : (ths1 > 0.5 ? 'ok' : 'warn'));
+  $('upd').textContent = 'updated ' + new Date(s.t * 1000).toLocaleTimeString();
+  $('t-ths').textContent = fmt(ths1) + ' TH/s'; $('t-ths5').textContent = '5 min avg ' + fmt(ths5);
+  $('t-pt').textContent = s.est_wall_w ? '≈ ' + s.est_wall_w + ' W' : '–'; $('t-est').textContent = pt ? 'Braiins target ' + pt + ' W' : '';
+  $('t-v').textContent = fmt(vMean, 2) + ' V';
+  const tr = s.trim; $('t-trim').textContent = tr ? 'trim ' + fmt(parseFloat(tr.applied), 1) + ' % (target ' + fmt(parseFloat(tr.target), 1) + ' %)' : 'no trim (board check refused)';
+  $('t-chip').textContent = fmt(chip) + ' °C'; $('t-fan').textContent = s.fan_pct != null ? 'fan target ' + s.fan_pct + ' %' : '';
+  $('t-jth').textContent = est && ths5 > 0.5 ? fmt(est / ths5) + ' J/TH' : '–';
+  // who controls the level: setup run, an external API client (last call within 60 min), or manual use
+  const b = $('banner'), c = s.controller || {};
+  b.hidden = false; b.className = 'banner' + (c.kind === 'manual' || !c.kind ? ' calm' : '');
+  if (c.kind === 'setup') b.innerHTML = c.who === 'calibrate' ? '<b>Trim calibration running</b> — see the calibration card below'
+    : '<b>Setup running</b> — <a href="setup.html">open the monitor →</a>';
+  else if (c.kind === 'api') b.textContent = `API (last request ${c.age_min} min ago, from ${c.addr}) — it may override manual changes at its next request.`;
+  else b.textContent = 'Manual';
+  // boards
+  const hb = g(s, 'hashboards', 'hashboards') || [];
+  $('boards').innerHTML = hb.map(x => `<tr><td>${x.id}</td><td>${x.enabled ? '✓' : '—'}</td><td>${fmt(g(x, 'stats', 'real_hashrate', 'last_5m', 'gigahash_per_second') / 1000, 2)}</td><td>${fmt(g(x, 'current_frequency', 'hertz') / 1e6, 0)}</td><td>${fmt(vb[x.id], 2)}</td><td>${fmt(g(x, 'highest_chip_temp', 'temperature', 'degree_c'))}</td><td>${fmt(g(x, 'board_temp', 'degree_c'))}</td></tr>`).join('');
+  hb.forEach(x => { const c = $('b' + x.id); if (c && !c.dataset.touched) c.checked = !!x.enabled; });
+  const fans = g(s, 'cooling', 'fans') || [];
+  $('fans').innerHTML = fans.map(f => `<tr><td>Fan ${f.position + 1}</td><td>${f.rpm} rpm</td><td>${fmt((f.target_speed_ratio || 0) * 100, 0)} %</td></tr>`).join('');
+  if (!levelsSet && s.levels) { $('c-power').innerHTML = s.levels.map(l => `<option ${l === pt ? 'selected' : ''}>${l}</option>`).join(''); levelsSet = true; }
+  if (s.auth === false && !openUI) { openUI = true; $('unlock').style.display = 'none'; ['ctlcard', 'calcard'].forEach(id => $(id).classList.remove('locked')); }
+  $('events').textContent = (s.events || []).slice().reverse().map(e => e.t.replace('T', ' ').replace('Z', '') + '  ' + e.kind + '  ' + e.line.trim()).join('\n') || 'no events';
+}
+
+async function chart() {
+  let h; try { h = await (await fetch('api/history', { cache: 'no-store' })).json(); } catch (e) { return; }
+  const svg = $('chart'); if (!h || h.length < 2) { svg.innerHTML = '<text x="500" y="90" text-anchor="middle" fill="currentColor" opacity=".5">collecting history…</text>'; return; }
+  const t0 = h[0].t, t1 = h[h.length - 1].t, W = 1000, H = 160;
+  const line = (key, max, col) => {
+    const pts = h.filter(p => p[key] != null).map(p => `${((p.t - t0) / Math.max(1, t1 - t0) * W).toFixed(1)},${(H - Math.min(1, p[key] / max) * (H - 10) + 5).toFixed(1)}`);
+    return `<polyline fill="none" stroke="${col}" stroke-width="2" vector-effect="non-scaling-stroke" points="${pts.join(' ')}"/>`;
+  };
+  const maxT = Math.max(10, ...h.map(p => p.ths || 0)) * 1.1;
+  svg.innerHTML = line('ths', maxT, 'var(--chart)') + line('chip_c', 100, 'var(--chart2)');
+  $('lg-range').textContent = `${new Date(t0 * 1000).toLocaleTimeString()} – ${new Date(t1 * 1000).toLocaleTimeString()}, TH/s scale 0–${maxT.toFixed(0)}, °C 0–100`;
+}
+
+function unlock() { if (pw) { $('ctlcard').classList.remove('locked'); $('calcard').classList.remove('locked'); } }
+$('pwbtn').onclick = () => { pw = $('pw').value; try { localStorage.setItem('s19pw', pw); } catch (e) {} unlock(); };
+['b1', 'b2', 'b3'].forEach(id => $(id).onchange = e => e.target.dataset.touched = '1');
+document.querySelectorAll('[data-act]').forEach(btn => btn.onclick = async () => {
+  const act = btn.dataset.act, body = { action: act };
+  if (act === 'power') body.watts = +$('c-power').value;
+  if (act === 'boards') body.boards = ['1', '2', '3'].filter(i => $('b' + i).checked);
+  if (act === 'fan') body.pct = +$('c-fan').value;
+  if (act === 'trim') body.pct = +$('c-trim').value;
+  if (act === 'boards' && !confirm('Switch boards to ' + body.boards.join(',') + '? bosminer restarts (~1 min).')) return;
+  btn.disabled = true; $('msg').className = 'msg'; $('msg').textContent = act + '…';
+  try {
+    const r = await fetch('api/control', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Auth': pw, 'X-S19-Page': '1' }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (r.status === 401) { pw = ''; try { localStorage.removeItem('s19pw'); } catch (e) {} $('ctlcard').classList.add('locked'); $('calcard').classList.add('locked'); }
+    $('msg').className = 'msg ' + (j.ok ? 'ok' : 'err'); $('msg').textContent = j.ok ? act + ': done' : act + ': ' + j.error;
+  } catch (e) { $('msg').className = 'msg err'; $('msg').textContent = act + ': ' + e; }
+  btn.disabled = false; ['b1', 'b2', 'b3'].forEach(id => delete $(id).dataset.touched); refresh();
+});
+
+$('modebtn').onclick = async () => {
+  const r = await fetch('api/core', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Auth': pw }, body: JSON.stringify({ mode: $('c-mode').value, save: true }) });
+  const j = await r.json(); $('msg').className = 'msg ok'; $('msg').textContent = 'mode: ' + j.mode;
+};
+fetch('api/core', { cache: 'no-store' }).then(r => r.json()).then(j => {
+  if (j.mode) $('c-mode').value = j.mode;
+  const t = Object.values(j.table || {});
+  effCurve($('eff'), $('eff-legend'), { stock: t.map(e => [e.sw, e.s]), trimmed: t.filter(e => e.v).map(e => [e.w, e.e]) });
+}).catch(() => {});
+
+// ---- trim calibration ----
+let calShown = null;
+function calPlot(run) {
+  const svg = $('k-chart'), pts = (run && run.points) || [];
+  if (pts.length < 2) { svg.innerHTML = '<text x="500" y="110" text-anchor="middle" fill="currentColor" opacity=".5">no points yet</text>'; $('k-axis').textContent = ''; return; }
+  const W = 1000, H = 220, x0 = Math.min(...pts.map(p => p.duty)), x1 = Math.max(...pts.map(p => p.duty));
+  const vs = pts.map(p => p.v), y0 = Math.min(...vs) - 0.1, y1 = Math.max(...vs) + 0.1;
+  const X = d => ((d - x0) / Math.max(0.01, x1 - x0) * (W - 20) + 10).toFixed(1), Y = v => (H - 10 - (v - y0) / (y1 - y0) * (H - 20)).toFixed(1);
+  svg.innerHTML = `<polyline fill="none" stroke="var(--chart)" stroke-width="2" vector-effect="non-scaling-stroke" points="${pts.map(p => X(p.duty) + ',' + Y(p.v)).join(' ')}"/>` +
+    pts.map(p => `<circle cx="${X(p.duty)}" cy="${Y(p.v)}" r="2.5" fill="var(--chart)"><title>${p.duty} % → ${p.v} V</title></circle>`).join('');
+  $('k-axis').textContent = `drive ${x0}–${x1} %  ·  board ${y0.toFixed(2)}–${y1.toFixed(2)} V  ·  ${pts.length} points` + (run.watts ? `  ·  ${run.watts} W, boards ${run.boards}` : '');
+}
+async function calRefresh() {
+  let j; try { j = await (await fetch('api/calibrate', { cache: 'no-store' })).json(); } catch (e) { return; }
+  const r = j.run || {}, last = (r.points || []).slice(-1)[0];
+  $('k-status').textContent = r.started ? `${r.running ? 'RUNNING' : 'last run'}: ${r.status}` + (last ? `  ·  ${last.duty} % → ${last.v} V, slowest board ${fmt(last.min_rate, 1)} TH/s` : '') : 'no run yet';
+  $('k-go').disabled = !!r.running;
+  if (!calShown || r.running) calPlot(r);
+  const sel = $('k-saved'), cur = sel.value; sel.innerHTML = (j.saved || []).map(n => `<option>${n}</option>`).join(''); if (cur) sel.value = cur;
+}
+async function calPost(body) {
+  const r = await fetch('api/calibrate', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Auth': pw }, body: JSON.stringify(body) });
+  const j = await r.json(); $('k-msg').className = 'msg ' + (j.ok ? 'ok' : 'err'); $('k-msg').textContent = j.ok ? body.action + ': ok' : j.error; calShown = null; calRefresh();
+}
+$('k-go').onclick = () => { if (confirm('Start the trim sweep at the current level? The trim goes up to the stop % or the hashing limit, then back to 0.'))
+  calPost({ action: 'start', start: +$('k-start').value, stop: +$('k-stop').value, step: +$('k-step').value, settle: +$('k-settle').value }); };
+$('k-stopbtn').onclick = () => calPost({ action: 'stop' });
+$('k-load').onclick = async () => { const f = $('k-saved').value; if (!f) return; calShown = f; calPlot(await (await fetch('api/calibrate?file=' + encodeURIComponent(f))).json()); };
+calRefresh(); setInterval(calRefresh, 4000);
+unlock(); refresh(); chart(); setInterval(refresh, 5000); setInterval(chart, 60000);
+</script>
+</body>
+</html>

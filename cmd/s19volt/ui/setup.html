@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>S19 Setup</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header><h1>S19 Setup</h1><span id="wstate" class="pill">…</span><span class="sub"><a href="./">← back to the heater</a></span></header>
+<main>
+  <section class="card" id="form">
+    <h2>What you want</h2>
+    <div class="row" id="f-summary" hidden><span id="f-sumtext" style="font-size:14px"></span>
+      <button class="sec" id="f-toggle" style="margin-left:auto">show settings</button></div>
+    <div class="ctl" id="f-body">
+      <div class="row"><label>Wattage range</label>
+        <input type="number" id="f-min" step="100" style="width:90px"> – <input type="number" id="f-max" step="100" style="width:90px"> W,
+        step <input type="number" id="f-step" step="50" style="width:80px"> W</div>
+      <div class="hint">The power levels your heating uses, in real (estimated) watts at the wall. One level per step; each one is optimised,
+        from low to high power.</div>
+      <div class="row"><label>Maximum fan</label><input type="number" id="f-fan" min="15" max="100" style="width:80px"> %
+        <button class="sec" id="listen">Listen 30 s</button><span id="listen-msg" class="hint"></span></div>
+      <div class="hint">The loudest the miner may get. Press Listen to hear it from where you sit (the minimum is fixed at 15 %).
+        <button class="help" data-k="fan" title="how the fans run during setup" aria-label="help: maximum fan">?</button></div>
+      <div class="help-text" id="help-fan" hidden>During the whole setup the heater's own fan rule drives the fans live, between 15 % and
+        this maximum (up 5 % when chips reach 74 °C, down 2 % when they stay ≤ 70 °C; at most one move a minute during setup), so chips
+        are measured at the temperature they will run at. Each level's fan = where the rule is when that level finishes (its starting fan
+        later).</div>
+      <div class="row"><label>Chip temperature</label><input type="number" id="f-chip" min="55" max="80" style="width:80px"> °C
+        <span class="hint">recommended 74 °C — the S19 reports an estimate (board sensor + 15 °C), not a real chip reading</span></div>
+      <div class="row"><label></label><span><input type="checkbox" id="f-fewer"> Try fewer hashboards under 600 W</span>
+        <span class="hint">More efficient at very low power levels, slower tune</span></div>
+      <div class="row" style="align-items:flex-start"><label></label><span><input type="checkbox" id="f-reset">
+        <b>I understand:</b> my saved Braiins tunes are moved to a backup before the efficiency search, so every level is tuned fresh
+        <div class="hint">Moved, not deleted: /etc/s19volt/backup/bosminer-autotune-&lt;date&gt;.json — the setup shows how to put it back.
+        bosminer restarts once for this.</div></span></div>
+      <div class="est" id="estimate"></div>
+      <div class="row" id="start-row"><button id="start">Start setup</button>
+        <button class="sec" id="resume" hidden>Resume</button>
+        <button class="sec" id="resume-redo" hidden title="Resume, but run the preparation again first (fixed test profile, trim sweep, back to the tuner): new curve, floor and mod check; finished levels are kept">Resume and redo the sweep</button>
+        <button class="sec" id="extend" hidden>Tune the added levels</button>
+        <span class="msg" id="start-msg"></span></div>
+      <div class="hint" id="ext-note" hidden></div>
+      <div class="row" id="clear-row" hidden><button class="danger" id="clear-all">Clear everything and start again</button>
+        <span class="hint">wipes the saved run (preparation, rows, timelines, chip data); the applied heater table and Braiins' saved tunes and backups stay</span></div>
+      <div class="hint" id="start-hint">Needs the trim wiring in place (see the guide). The miner changes power levels by itself during setup; while it
+        runs, outside commands (level, power, trim, fan, boards) are refused with "setup running" — pause your thermostat automation so it
+        does not keep trying. A stopped or interrupted run can be resumed.</div>
+    </div>
+  </section>
+
+  <section class="card" id="monitor" style="display:none">
+    <h2>Progress</h2>
+    <div class="row" style="justify-content:space-between"><div id="live" style="font-size:14px"></div>
+      <div><span id="remain" class="hint"></span></div></div>
+    <div id="tuner" class="hint" style="margin-top:4px"></div>
+    <div class="tiles" id="now" style="margin:10px 0"></div>
+    <div class="sect">Preparation (once)</div>
+    <div class="stages" id="prep"></div>
+    <div class="sect">Tuning loop (per level) <span class="hint" id="loop-head"></span>
+      <button class="help" data-k="search" title="what the tuning loop does" aria-label="help: tuning loop">?</button></div>
+    <div class="help-text" id="help-search" hidden></div>
+    <div id="loop"></div>
+    <div class="hint" id="final" style="margin-top:6px"></div>
+    <div id="evbox" style="margin-top:10px" hidden><div class="row" style="justify-content:space-between"><b style="font-size:13px">Events</b>
+      <button class="sec" id="ev-all" style="padding:3px 10px;font-size:12px">show all</button></div>
+      <div class="evlist" id="events"></div></div>
+    <div class="row" style="margin-top:10px"><button class="danger" id="stop">Cancel run</button>
+      <span class="hint">the miner returns to its previous level at stock voltage; results so far are kept</span></div>
+    <div class="msg" id="wmsg"></div>
+  </section>
+
+  <section class="card" id="tuned" style="display:none">
+    <h2>Tuned levels (what the heater will use)</h2>
+    <div style="overflow:auto"><table class="levels"><thead><tr><th></th><th>Level*</th><th>Boards</th><th>Status</th><th>Braiins target</th><th>Stock V</th><th>Tuned V</th><th>Weak chips</th>
+      <th>Drive</th><th>TH/s</th><th>J/TH stock → tuned*</th><th>Chip °C</th><th>Fan</th><th></th></tr></thead><tbody id="levels"></tbody></table></div>
+    <div class="hint">* estimated wall power, from a model fitted on a metered S19 (wall ≈ 74.7 W + 0.988 × target × (V / 11.82)^1.7,
+      typically within ~10–25 W). Bold = the board count kept for that level. Tuned V = the voltage the heater uses (the passing step with the best est. J/TH;
+      "stock" when the latch check never came back clean). Weak chips = newly weak at that step. Fan = the live fan rule's fan when the
+      level finished. ⓘ = notes.</div>
+    <div class="row" style="margin-top:8px" id="clear-sel-row"><button class="sec" id="clear-sel" disabled>Clear selected</button>
+      <span class="hint">ticked rows are tuned again on Resume / Tune the added levels</span></div>
+    <div class="hint">Each row goes into the heater's level table as soon as its level finishes.</div>
+  </section>
+
+  <section class="card" id="results" style="display:none">
+    <h2>Results</h2>
+    <div id="checks" style="font-size:14px;margin-bottom:10px"></div>
+    <h2 style="margin-top:6px">Efficiency curve</h2>
+    <svg id="eff" viewBox="0 0 1000 220" style="height:220px"></svg>
+    <div class="legend" id="eff-legend"></div>
+    <h2 style="margin-top:14px">Drive points</h2>
+    <div class="hint" style="margin-bottom:4px">Board voltage per trim drive: line = the 0-100 % trim sweep on the conservative test profile (~250 MHz,
+      Braiins' minimum voltage; one point per 2 %), dots = the floor (red: the sweep's 100 % point), the trim test of older runs (grey) every search step (one colour per level) and the load droop points (square: your lowest wattage, diamond: your highest). Each level's first step starts from these points; steps are drives (no voltage feedback) and each one adds its averaged voltage here.</div>
+    <svg id="curves" viewBox="0 0 1000 240" style="height:240px"></svg>
+    <div class="legend" id="curves-legend"></div>
+  </section>
+
+  <section class="card" id="chipcard" style="display:none">
+    <h2>Chip map <span class="hint" id="cm-src" style="text-transform:none;letter-spacing:0">— tuning data from the setup run, not live</span></h2>
+    <div class="hint" style="margin-bottom:8px">Each square is one chip, drawn where it sits on the hashboard (each domain is a vertical pair; the chain snakes
+      from the data connector at the top left). Coloured by how much of
+      its stock-voltage work (valid shares per minute) it kept at the selected step. The chips that go red first are the ones limiting low-voltage operation.</div>
+    <div class="row"><label>Level</label><input type="range" id="cm-level" min="0" max="0" value="0" style="flex:1;max-width:520px">
+      <b id="cm-level-lbl"></b></div>
+    <div class="row" id="cm-steps"></div>
+    <div id="cm-grid"></div>
+    <div class="legend"><span><i style="background:#2f9e44"></i>≥ 97 %</span><span><i style="background:#e6c200"></i>90–97 %</span>
+      <span><i style="background:#e67700"></i>70–90 %</span><span><i style="background:#c92a2a"></i>&lt; 70 %</span><span><i style="background:#555"></i>no work / unknown</span></div>
+    <div id="cm-limit" style="font-size:13px;margin-top:6px"></div>
+  </section>
+</main>
+<script src="charts.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const fmt = (v, d = 1) => (v == null || isNaN(v) || v === 0 ? '–' : Number(v).toFixed(d));
+const hm = m => m >= 60 ? Math.floor(m / 60) + ' h ' + String(Math.round(m % 60)).padStart(2, '0') + ' min' : Math.round(m) + ' min';
+let pw = ''; try { pw = localStorage.getItem('s19pw') || ''; } catch (e) {}
+let filled = false;
+
+async function post(body) {
+  const r = await fetch('api/wizard', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Auth': pw }, body: JSON.stringify(body) });
+  return r.json();
+}
+function inputs() {
+  return { min_w: +$('f-min').value, max_w: +$('f-max').value, step_w: +$('f-step').value, max_fan: +$('f-fan').value,
+           chip_target: +$('f-chip').value, fewer_boards: $('f-fewer').checked, reset_tunes: $('f-reset').checked,
+           margin_v: 0 };
+}
+async function estimate() {
+  const i = inputs();
+  const j = await (await fetch(`api/wizard?min_w=${i.min_w}&max_w=${i.max_w}&step_w=${i.step_w}&max_fan=${i.max_fan}&chip=${i.chip_target}&fewer=${i.fewer_boards ? 1 : 0}`, { cache: 'no-store' })).json();
+  extendInfo = j.extend || null; savedRun(j.state || {}, j.resume);
+  if (!j.estimate_min) { $('estimate').innerHTML = '<span class="warn">check the range</span>'; return; }
+  const e = j.estimate_min, tot = Object.values(e).reduce((a, b) => a + b, 0);
+  $('estimate').innerHTML = `<span>Checks</span><b>${hm(e.check)}</b>` +
+    `<span>Fixed test profile (~250 MHz, Braiins' minimum voltage; tuner off)</span><b>≈ ${hm(e.fixed)}</b>` +
+    `<span>Trim sweep 0-100 % in 2 % steps (mod check, drive chart, lowest voltage; ~17 min, drawn as it goes)</span><b>≈ ${hm(e.sweep)}</b>` +
+    `<span>Load droop: 3 drive points at your lowest and at your highest wattage (manual mode)</span><b>≈ ${hm(e.droop)}</b>` +
+    `<span>Back to Braiins' tuner, saved tunes moved aside</span><b>≈ ${hm(e.tuner)}</b>` +
+    `<span>Efficiency search (${j.levels} levels${i.fewer_boards ? ' + fewer-board tests' : ''}; about ${hm(j.level_min)} for the first level
+      of a board set, ${hm(j.level_min_next)} for later ones: soft reset, fresh Braiins tune ~20 min (the 5-min stock baseline is measured while waiting for its settled round), then ours — drive steps
+      (gallop + halving, a soft reset after each failing step), latch check (3 min at stock, sometimes 5 min at the answer first). Worst case ${hm(j.level_max_min)} per level)</span><b>≈ ${hm(e.search)}</b>` +
+    `<span>Total</span><b>≈ ${hm(tot)}</b>`;
+}
+['f-min', 'f-max', 'f-step', 'f-fan', 'f-chip', 'f-fewer'].forEach(id => $(id).addEventListener('input', estimate));
+// saved run (not running): Resume, Tune the added levels, Clear everything
+let extendInfo = null, resumeText = '';
+function savedRun(s, resume) {
+  const saved = !s.running && !!(s.stages && s.stages.length);
+  resumeText = saved ? (resume || '') : '';
+  $('resume').hidden = !resumeText; $('resume').textContent = resumeText || 'Resume';
+  $('resume-redo').hidden = !resumeText;
+  $('clear-row').hidden = !saved;
+  const x = saved ? extendInfo : null;
+  $('extend').hidden = !x; $('ext-note').hidden = !x || x.ok;
+  if (x) { $('extend').disabled = !x.ok; $('extend').textContent = x.ok ? x.text : 'Tune the added levels'; $('ext-note').textContent = x.reason || ''; }
+}
+async function resumeRun(redo) {
+  const j = await post({ action: 'resume', redo_prep: redo });
+  $('start-msg').className = 'msg ' + (j.ok ? 'ok' : 'err');
+  $('start-msg').textContent = j.ok ? (redo ? 'resumed: preparation runs again' : 'resumed') : j.error; refresh();
+}
+$('resume').onclick = () => resumeRun(false);
+$('resume-redo').onclick = () => resumeRun(true);
+$('extend').onclick = async () => {
+  const i = inputs();
+  const j = await post({ action: 'extend', min_w: i.min_w, max_w: i.max_w, step_w: i.step_w, fewer_boards: i.fewer_boards, max_fan: i.max_fan, chip_target: i.chip_target });
+  $('start-msg').className = 'msg ' + (j.ok ? 'ok' : 'err'); $('start-msg').textContent = j.ok ? 'started' : j.error; refresh();
+};
+$('clear-all').onclick = async () => {
+  if (!confirm('Clear the saved run (preparation results, all tuned rows, timelines, chip data)? The applied heater table and Braiins\' saved tunes are not touched.')) return;
+  const j = await post({ action: 'clear_all' });
+  $('start-msg').className = 'msg ' + (j.ok ? 'ok' : 'err'); $('start-msg').textContent = j.ok ? 'saved run cleared' : j.error; refresh(); estimate();
+};
+$('f-reset').addEventListener('change', () => { $('start').disabled = !$('f-reset').checked; });
+
+$('listen').onclick = async () => {
+  const j = await post({ action: 'listen', fan: +$('f-fan').value });
+  if (!j.ok) { $('listen-msg').textContent = j.error; return; }
+  let s = 30; $('listen').disabled = true;
+  const t = setInterval(() => { $('listen-msg').textContent = `fans at ${$('f-fan').value} % — ${s--} s`; if (s < 0) { clearInterval(t); $('listen-msg').textContent = 'back to ' + j.back_to + ' %'; $('listen').disabled = false; } }, 1000);
+};
+$('start').onclick = async () => {
+  const i = inputs();
+  if (!confirm(`Start setup: ${i.min_w}-${i.max_w} W, step ${i.step_w} W, fans at ${i.max_fan} %, chips ≤ ${i.chip_target} °C?\nThe miner will change levels and voltage on its own.` +
+    (resumeText || !$('extend').hidden ? '\nThis starts a fresh run and clears the saved one (preparation, tuned rows, timelines).' : ''))) return;
+  const j = await post(Object.assign({ action: 'start' }, i));
+  $('start-msg').className = 'msg ' + (j.ok ? 'ok' : 'err'); $('start-msg').textContent = j.ok ? 'started' : j.error; refresh();
+};
+$('stop').onclick = async () => { if (confirm('Cancel the setup run? The miner returns to its previous level at stock voltage; results so far are kept.')) { await post({ action: 'stop' }); refresh(); } };
+let showSettings = false;
+$('f-toggle').onclick = () => { showSettings = !showSettings; $('f-body').hidden = !showSettings; $('f-toggle').textContent = showSettings ? 'hide settings' : 'show settings'; };
+// settings while a run is active: the run's own inputs, read-only, collapsed to one line
+const formIds = ['f-min', 'f-max', 'f-step', 'f-fan', 'f-chip', 'f-fewer', 'f-reset', 'listen'];
+let formRun = null;
+function formMode(s) {
+  const run = !!s.running, i = s.inputs || {};
+  formIds.forEach(id => { $(id).disabled = run; });
+  $('f-summary').hidden = !run; $('start-row').hidden = run; $('start-hint').hidden = run;
+  $('f-body').hidden = run && !showSettings;
+  if (run && formRun !== s.started) { // show what this run uses
+    formRun = s.started;
+    $('f-min').value = i.min_w; $('f-max').value = i.max_w; $('f-step').value = i.step_w; $('f-fan').value = i.max_fan; $('f-chip').value = i.chip_target;
+    $('f-fewer').checked = !!i.fewer_boards; $('f-reset').checked = true;
+    estimate();
+  }
+  if (!run) formRun = null;
+  $('f-sumtext').innerHTML = run ? `<b>This run:</b> ${i.min_w}–${i.max_w} W, step ${i.step_w} W · max fan ${i.max_fan} % · chips ≤ ${i.chip_target} °C · fewer boards ${i.fewer_boards ? 'yes' : 'no'}` +
+    (i.margin_v ? ` + ${i.margin_v} V` : '') : '';
+}
+// stage help (item texts: what the stage does, why, typical duration)
+const stageHelp = {
+  check: 'Checks the miner, the Braiins API, the boards and the trim output, and reads Braiins\' minimum power target (levels are never set below it). About 3 min.',
+  fixed: 'Switches Braiins to manual mode: its tuner off, the same conservative clock (~250 MHz, about 900–1000 W) on every chip, at Braiins\' minimum PSU voltage (read from bosminer, else 11.96 V). Low clock on purpose: high clocks at low voltage can latch boards. Waits until every board hashes, the chips have reached the profile clock and the PSU has stopped stepping (voltage readings are wrong while it steps). About 3 min. If manual mode is refused, the setup falls back to letting Braiins tune the bottom of your range (about 30 min). Your miner is always put back in tuner mode at its previous power target, even if the setup stops or fails.',
+  prepare: 'Switched the miner to the bottom of your range (3 boards, stock voltage) and waited until Braiins had tuned that level from scratch (runs from before the fixed test profile).',
+  wiring: '(older runs: now part of the trim sweep) On the test profile, glided the trim to 50 % and checked that the board voltage drops.',
+  sweep: 'Same profile: sweeps the trim from 0 to 100 % in 2 % steps, waits 8 s after each step (trim glide and capacitor), then averages the board voltage over the next 12 s (single readings are noisy and refresh only every few seconds). It is also the trim test: as soon as the voltage is 0.15 V below the 0 % reading, « ✓ the mod works » shows here while the sweep goes on; if it has not dropped by the end of the sweep, the stage fails (check the wiring). Every point is the drive chart below: where the mod starts acting (the first drop), the useful range (the slope), and the floor set by your series resistor (the mean voltage at 100 %, about 8.8 V with 33 kΩ). The sweep always runs to 100 %, even when boards stop hashing: at the test clock that says nothing about your low-power levels, so it is shown as information only (a board that loses its voltage completely is left out of the mean). Measured at the conservative test profile (~900–1000 W) from Braiins\' minimum voltage, the same setpoint the tuned levels trim from, so drive % → voltage carries over; each level then starts from its own measured points; every step is a drive whose voltage is the hold\'s average (no feedback). No later step goes near the floor. Then the trim drops to 0 % at once; the next stages restart bosminer (manual mode at a new clock, then tuner mode back), which clears any chip the deep end of the sweep latched. About 17 min; the chart draws each point as it comes in.',
+  floor: '(runs from before the trim sweep) Same profile: glides to 100 % trim (5 % per 10 s; stops early if a board falls below 60 % of its rate): the lowest voltage your series resistor allows (about 8.8 V with 33 kΩ). No later step goes near it. About 10 min.',
+  curves: '(runs from before the trim sweep) Same profile: sweeps the trim from 30 to 75 % in 1 % steps and records the board voltage — the drive chart below, so you see the mod working across its range. Measured at the conservative test profile (~900–1000 W) from Braiins\' minimum voltage, the same setpoint the tuned levels trim from, so drive % → voltage carries over. Each level then starts from its own measured points; every step is a drive whose voltage is the hold\'s average. About 11 min.',
+  droop: 'The same trim drive gives a slightly different voltage at low and at high power (the PSU sags under load). This stage measures that once, so every level\'s first step lands close: manual mode at your lowest wattage, 3 drive points in the middle of the sweep\'s slope (never past its 9.6 V point), then at your highest wattage, 3 drive points near the top only (never past its 11.3 V point: high clocks never run at low voltage). Each point: 8 s to settle, then 30 s of voltage readings averaged. If a board drops below 60 % of its rate, the rest of that wattage is skipped. The trim goes back to 0 before every clock change. About 8 min.',
+  tuner: 'Puts Braiins back in tuner mode at your previous power target (bosminer restarts, which clears anything the sweep left latched), then moves your saved Braiins tunes to a backup so every level is tuned fresh. The search\'s first level also starts with a clean soft power cycle. About 6 min.',
+  search: 'Per level: a soft reset (pause, cool, bosminer off with the trim set to 0 at the moment the boards lose power, on — clears any latched chips), a fresh Braiins tune (~20 min) with the 5-min stock baseline measured during the wait for a settled stage-4 round (a sliding window: any Braiins voltage change restarts it; trimming starts as soon as the round is settled and 5 clean minutes are in), then drive steps (board voltage readings refresh only every ~10 s per board and swing ±0.3 V, so the search never steers on them): each step glides to a drive %, holds it without corrections, and records the hold\'s average board voltage. The first step is the drive of the predicted voltage; a fail takes 0.2 V less drive (0.1 V when the level below predicts it well), a pass 0.1 V (half) more, converted to drive at the local slope (0.3–5 %), then the gap between the most passing drive and the least failing one is halved down to 0.05 V (or 0.3 %). Every step is judged as before (5-min hold; ≥ 96 % TH/s, at most 1 newly weak chip); a failing step is followed by a soft reset. Answer = the passing step with the most drive (its drive and average voltage), then the latch check (latching only gets worse at lower voltage): if the last step ran at or below the answer\'s voltage (the answer or the failing step just below it, which is not reset), straight back to stock and compare with the baseline — clean clears the answer; latched after a step below it is inconclusive, so reset, 5 min at the answer, check again. If the last step ran above the answer, 5 min at the answer first (a reset before it if a lower step ran since the last one). The path taken shows in the level notes (latched: +0.05 V, test again, up to 4 times). The fan rule runs live all the time. About 40 min per level, worst case a few hours.',
+  table: 'Writes the level table the heater uses (voltage, drive and fan per level). You review it below and press Apply. Instant.',
+};
+const helpOpen = new Set();
+$('help-search').innerHTML = stageHelp.search;
+$('monitor').addEventListener('click', e => {
+  const b = e.target.closest('button.help'); if (!b) return;
+  const k = b.dataset.k; helpOpen.has(k) ? helpOpen.delete(k) : helpOpen.add(k);
+  const d = $('help-' + k); if (d) d.hidden = !helpOpen.has(k);
+});
+
+// one answer cell: voltage, est. J/TH, newly weak chips, safety (efficiency only)
+const ans = (a, eff) => !a ? '–' : `${a.v.toFixed(2)} <span class="hint">${fmt(a.jth, 1)} J/TH, ${(a.new_weak || []).length} weak` +
+  (eff ? (a.safe ? '' : ', <span class="warn">unsafe</span>') : '') + '</span>';
+const notes = l => [l.note, l.min_target ? `target raised to Braiins' minimum ${l.min_target} W` : '',
+  l.latch_known ? (l.latched && l.latched.length ? `latched: ${l.latched.join(', ')}` : '') : (l.status === 'done' && (l.steps || []).length ? 'no per-chip latch data' : ''),
+  l.latch_path || '', l.redos ? `${l.redos} step redone (bosminer retuned)` : '', l.profile_changed ? '<span class="warn">Braiins changed its saved tune</span>' : '',
+  l.profile_note || ''].filter(Boolean).join('; ');
+// noteIcon: a row's notes behind a click-to-open ⓘ (nothing when there are none)
+const noteOpen = new Set(); // rows whose notes are open (the table is rebuilt on every refresh)
+document.addEventListener('toggle', e => { const d = e.target; if (d.matches && d.matches('details.note')) d.open ? noteOpen.add(d.dataset.k) : noteOpen.delete(d.dataset.k); }, true);
+const noteIcon = (ns, k) => ns.length ? `<details class="note" data-k="${k}" ${noteOpen.has(k) ? 'open' : ''}><summary title="notes" aria-label="notes">ⓘ</summary><div>${ns.join('<br>')}</div></details>` : '';
+const icon = { waiting: '○', running: '●', done: '✓', failed: '✕', skipped: '–' };
+const ago = (a, b) => a ? hm(((b || Date.now() / 1000) - a) / 60) : '';
+// trim tile: the applied drive, 0 included (fmt shows 0 as '–'), and the target while a glide is under way
+const trimText = t => { const a = +t.applied || 0, g = +t.target || 0; return a.toFixed(1) + ' %' + (Math.abs(g - a) > 0.05 ? ' → ' + g.toFixed(1) : ''); };
+// drive chart: board voltage against trim drive; line = the 0-100 % sweep on the test profile, dots = trim test of older runs (0/50 %), floor (the sweep's 100 % point)
+// and every measured search step (one colour per level); thin lines = the fitted drive model (drivemodel.go) at each level's load, in the level's colour
+function plotCurves(curves, pts, fixed, fits) {
+  const svg = $('curves'), lvCols = ['var(--chart2)', 'var(--ok)', '#9c36b5', '#0ca678', '#e64980', '#f08c00'];
+  chartRedraw.set(svg, () => plotCurves(curves, pts, fixed, fits));
+  pts = pts || []; fits = fits || [];
+  const vs = curves.flatMap(c => (c.points || []).map(p => p.v)).concat(pts.map(p => p.v)).filter(v => v > 0);
+  if (vs.length < 2) { chartEmpty(svg, 'drive points appear here', 240); $('curves-legend').innerHTML = ''; return; }
+  const y0 = Math.floor((Math.min(...vs) - 0.2) * 10) / 10, y1 = Math.ceil((Math.max(...vs) + 0.1) * 10) / 10;
+  const f = chartFrame(svg, { x0: 0, x1: 100, y0, y1, xStep: 10, yStep: 0.5, H: 240,
+    xTitle: 'Trim drive (%)', yTitle: 'Board voltage (V)', xFmt: v => String(Math.round(v)), yFmt: v => v.toFixed(1) });
+  const lvs = [...new Set(pts.filter(p => p.src === 'step').map(p => p.l).concat(fits.map(x => x.l)))];
+  const dws = [...new Set(pts.filter(p => p.src === 'droop').map(p => p.w))].sort((a, b) => a - b), dCols = ['#1971c2', '#e8590c'];
+  const col = p => p.src === 'step' ? lvCols[lvs.indexOf(p.l) % lvCols.length] : p.src === 'floor' ? 'var(--bad)' : p.src === 'droop' ? dCols[dws.indexOf(p.w) % dCols.length] : 'var(--mute)';
+  // droop points: a square (low load) / a diamond (high load), so they never read as search steps
+  const mark = p => { const x = f.X(p.d), y = f.Y(p.v), t = `<title>${p.src} ${p.w} W${p.t ? ' (load ' + p.t + ' W target)' : ''} boards ${p.b}: ${p.d} % → ${p.v} V</title>`;
+    if (p.src !== 'droop') return `<circle cx="${x}" cy="${y}" r="4" fill="${col(p)}">${t}</circle>`;
+    return dws.indexOf(p.w) === 0 ? `<rect x="${x - 4}" y="${y - 4}" width="8" height="8" fill="${col(p)}">${t}</rect>`
+      : `<polygon points="${x},${y - 5} ${x + 5},${y} ${x},${y + 5} ${x - 5},${y}" fill="${col(p)}">${t}</polygon>`; };
+  const name = c => fixed && !fixed.fallback && fixed.mhz ? `test profile ${fixed.mhz} MHz, ≈ ${c.watts} W` : `curve ${c.watts} W`;
+  svg.innerHTML = f.grid + curves.map(c => `<polyline fill="none" stroke="var(--chart)" stroke-width="2" points="${(c.points || []).map(p => f.X(p.duty) + ',' + f.Y(p.v)).join(' ')}"><title>${name(c)}</title></polyline>` +
+    (c.points || []).map(p => { const nh = false; // not-hashing markers dropped: information only, cluttered the chart
+      return `<circle cx="${f.X(p.duty)}" cy="${f.Y(p.v)}" r="${nh ? 3 : 2}" ${nh ? 'fill="none" stroke="var(--chart2)" stroke-width="1.5"' : 'fill="var(--chart)"'}><title>${p.duty} % → ${p.v} V${p.board_v ? ' (' + Object.keys(p.board_v).sort().map(b => 'board ' + b + ' ' + p.board_v[b].toFixed(2) + (p.rates && p.rates[b] != null ? ' V, ' + p.rates[b].toFixed(1) + ' TH/s' : ' V')).join(', ') + ')' : ''}${nh ? ' — not hashing: board ' + p.not_hashing.join(', ') : ''}</title></circle>`; }).join('')).join('') +
+    fits.map(x => `<polyline fill="none" stroke="${col({ src: 'step', l: x.l })}" stroke-width="1" points="${x.pts.filter(p => p[1] >= y0 && p[1] <= y1).map(p => f.X(p[0]) + ',' + f.Y(p[1])).join(' ')}"><title>fit at ${x.w} W, boards ${x.b}: offset ${x.delta} %, ${x.k} %/W, ${x.n} steps</title></polyline>`).join('') +
+    pts.map(mark).join('');
+  const meta = l => (lastLevels.find(x => x.index === l) || {}), has = src => pts.some(p => p.src === src);
+  $('curves-legend').innerHTML = curves.map(c => `<span><i style="background:var(--chart)"></i>${name(c)} (${(c.points || []).length} pts)</span>`).join('') +
+    (has('wiring') ? '<span><i style="background:var(--mute)"></i>trim test 0 % / 50 %</span>' : '') +
+    (has('floor') ? `<span><i style="background:var(--bad)"></i>floor ${pts.find(p => p.src === 'floor').d} %</span>` : '') +
+    dws.map((w, i) => `<span><i style="background:${dCols[i % dCols.length]}${i ? ';transform:rotate(45deg)' : ''}"></i>droop at ${w} W</span>`).join('') +
+    lvs.map(l => { const x = fits.find(z => z.l === l);
+      return `<span><i style="background:${col({ src: 'step', l })}"></i>level ${meta(l).watts || '?'} W ${meta(l).boards || ''}${x ? ' · fit at ' + x.w + ' W' : ''}</span>`; }).join('');
+}
+let lastLevels = [], evAll = false;
+$('ev-all').onclick = () => { evAll = !evAll; refresh(); };
+const esc = t => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const agoS = s => s < 0 ? '' : s < 90 ? s + ' s ago' : Math.round(s / 60) + ' min ago';
+// Braiins' tuner detail (parsed from the bosminer log): stage, round, per-board MHz / mcr; the wizard's own step while it waits
+function tunerText(t, step, live) {
+  if (!t) return '';
+  const parts = [];
+  if (t.wait && step && step !== live) parts.push('Step: ' + esc(step));
+  let b = 'Braiins tuner: ' + (t.stage ? `stage ${t.stage}${t.stage_name ? ' (' + esc(t.stage_name) + ')' : ''} <span class="hint">${agoS(t.stage_age_s)}</span>` : 'no stage line yet');
+  const r = t.round;
+  if (r) b += ` · last round S${r.stage} it${r.round}: target ${r.target_w} W, est. ${Math.round(r.est_w)} W, ${r.v.toFixed(2)} V <span class="hint">${agoS(t.round_age_s)}</span>` +
+    (r.boards || []).map(x => ` · hb${esc(x.board)} ${x.mhz.toFixed(0)} MHz mcr ${x.mcr.toFixed(1)} %`).join('');
+  parts.push(b);
+  return parts.map(p => `<div>${p}</div>`).join('');
+}
+// ---- progress: preparation + tuning loop ----
+const hhmm = t => t ? new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
+const mmss = sec => { sec = Math.max(0, Math.round(sec)); return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0'); };
+const dur = sec => sec < 60 ? Math.round(sec) + ' s' : hm(sec / 60);
+let prepOpen = false;
+const lvlOpen = new Map(); // level index -> open (the user's choice; default: the running level open)
+function prepHTML(s, now) {
+  const st = (s.stages || []).filter(x => x.key !== 'search' && x.key !== 'table');
+  const done = st.length && st.every(x => x.status === 'done');
+  const t0 = Math.min(...st.map(x => x.started || Infinity)), t1 = Math.max(...st.map(x => x.ended || 0));
+  const keys = [s.floor_v ? `floor ${s.floor_v.toFixed(2)} V` : '', s.mod ? 'mod works ✓' : ''].filter(Boolean).join(' · ');
+  const rows = st.map(x => `<div class="stage ${x.status}"><div class="ic">${icon[x.status] || '?'}</div>
+    <div><div>${x.title} <button class="help" data-k="${x.key}" title="what this stage does" aria-label="help: ${x.title}">?</button></div>
+      <div class="help-text" id="help-${x.key}" ${helpOpen.has(x.key) ? '' : 'hidden'}>${stageHelp[x.key] || ''}</div><div class="d">${x.detail || ''}</div></div>
+    <div class="t">${x.started ? ago(x.started, x.ended) : (x.est_min ? 'est. ' + hm(x.est_min) : '')}</div></div>`).join('');
+  if (!done) return rows;
+  return `<div class="stage done prep-sum" data-prep="1"><div class="ic">✓</div><div>done · ${isFinite(t0) && t1 ? hm((t1 - t0) / 60) : ''}${keys ? ' <span class="hint">· ' + keys + '</span>' : ''}</div>
+    <div class="t">${prepOpen ? 'hide' : 'show'}</div></div>` + (prepOpen ? rows : '');
+}
+// phase icon; a running phase of a level that is no longer running was interrupted
+const phIcon = (p, live) => p.status === 'done' ? '✓' : p.status === 'fail' ? '✗' : live ? '●' : '✗';
+// holdLeft: " · 2:40 left" while a step's timed part (the hold) runs, from the running level's timeline
+function holdLeft(s) {
+  const lv = (s.levels || []).find(l => l.status === 'running'); if (!lv) return '';
+  const p = (lv.phases || []).filter(x => x.status === 'running').pop();
+  if (!p || p.kind !== 'step' || !p.mark || !p.expect) return '';
+  const left = p.expect - (Date.now() / 1000 - p.mark);
+  return left > 0 ? ' · ' + mmss(left) + ' left' : '';
+}
+function phaseRow(p, live, now) {
+  const run = p.status === 'running' && live;
+  const end = p.end || (run ? 0 : 0);
+  let t = '';
+  if (run) {
+    const from = p.mark || p.start, el = now - from;
+    t = (p.mark ? (p.mark_what || '') + ' ' : '') + mmss(el) + (p.expect ? ' / ' + mmss(p.expect) : '');
+  } else if (p.kind === 'end') {
+    t = hhmm(p.start);
+  } else if (p.end) {
+    t = `${hhmm(p.start)}–${hhmm(p.end)} · ${dur(p.end - p.start)}`;
+  } else {
+    t = hhmm(p.start) + ' · interrupted';
+  }
+  const cls = run ? 'running' : p.status === 'fail' || (p.status === 'running' && !live) ? 'fail' : 'done';
+  return `<div class="ph ${cls}"><span class="ic">${phIcon(p, live)}</span><span class="lb">${esc(p.label)}</span><span class="tm">${t}</span>` +
+    (p.detail ? `<span class="dt">${esc(p.detail)}</span>` : '') + '</div>';
+}
+const shortLabel = p => ({ clean: 'Clean reset', tune: 'Braiins tune', baseline: 'Baseline', reset: 'Reset', settle: 'Settle', latch: 'Latch check', end: 'Result' })[p.kind] ||
+  (p.label.match(/^(Step \d+|Confirm)/) || [p.label])[0];
+function stepsTable(l) {
+  if (!(l.steps || []).length) return '';
+  return `<div style="overflow:auto;margin-top:8px"><table class="steps"><thead><tr><th>#</th><th>Drive</th><th>Avg V</th><th>Hold</th><th>TH/s</th><th>Est. J/TH</th><th>Step mcr*</th>
+    <th>Newly weak chips</th><th>Step rule</th></tr></thead><tbody>` + l.steps.map((x, i) => `<tr><td>${i + 1}</td>
+    <td>${x.drive ? x.drive.toFixed(1) + ' %' : '–'}${l.eff && l.eff.step === i ? ' <span class="hint">answer</span>' : ''}</td>
+    <td>${x.v ? x.v.toFixed(2) + (x.bv ? ' <span class="hint">' + Object.keys(x.bv).sort().map(b => b + ': ' + x.bv[b].toFixed(2)).join(' · ') + '</span>' : '') : '–'}</td><td>${x.invalid ? 'thrown out' : x.dropped ? 'aborted' : x.full ? '5 min' : 'short'}</td>
+    <td>${fmt(x.ths, 2)}</td><td>${fmt(x.jth, 2)}</td>
+    <td>${x.mcr ? (x.mcr * 100).toFixed(1) + ' %' + (x.mcrs ? ' <span class="hint">' + Object.keys(x.mcrs).sort().map(b => b + ': ' + (x.mcrs[b] * 100).toFixed(1)).join(' · ') + '</span>' : '') : '–'}</td>
+    <td style="text-align:left">${x.new_weak || 0}${(x.weak_new || []).length ? ' <span class="hint">' + x.weak_new.join(', ') + '</span>' : ''}</td>
+    <td class="${x.invalid || x.pass ? '' : 'st-failed'}">${x.invalid ? '–' : x.dropped ? 'aborted' : x.pass ? 'pass' : 'fail'}</td></tr>`).join('') +
+    `</tbody></table></div><div class="hint">* step mcr = the hold's own hashrate from the per-chip counters vs the level's stock baseline; information only.
+    Step rule: ≥ 96 % TH/s, at most 1 newly weak chip; aborted = a board fell below 60 % of its stock rate.</div>`;
+}
+const lvlMin = (l, now) => { const p = l.phases || []; return l.minutes || (p.length ? ((p[p.length - 1].end || now) - p[0].start) / 60 : 0); };
+function levelHTML(l, n, live, now) {
+  const fin = !['waiting', 'running'].includes(l.status), run = l.status === 'running' && live;
+  const ps = l.phases || [];
+  const head = `Level ${n} — ${l.watts} W <span class="hint">${l.boards}</span>`;
+  if (l.status === 'waiting') return `<div class="lvl waiting"><span class="ic">○</span> ${head} <span class="hint">waiting</span></div>`;
+  let res;
+  if (run) res = `running · ${hm(lvlMin(l, now))}`;
+  else if (fin && l.v) res = `${l.v.toFixed(2)} V · ${fmt(l.est_jth, 1)} J/TH · ${hm(lvlMin(l, now))}`;
+  else res = `${l.status.replace('_', ' ')}${l.v ? '' : (l.status === 'done' || l.status === 'unsafe') ? ' · stock' : ''} · ${hm(lvlMin(l, now))}`;
+  const ic = run ? '●' : l.status === 'done' ? '✓' : l.status === 'interrupted' || l.status === 'failed' || l.status === 'running' ? '✗' : '–';
+  const open = lvlOpen.has(l.index) ? lvlOpen.get(l.index) : run;
+  const strip = run ? '<div class="strip">' + ps.filter(p => p.kind !== 'end').map(p => `<span class="${p.status === 'running' ? 'running' : p.status}">${phIcon(p, true)} ${esc(shortLabel(p))}</span>`).join('') +
+    (ps.some(p => p.kind === 'latch') ? '' : '<span class="todo">○ Latch check</span>') + '</div>' : '';
+  const body = (ps.length ? ps.map(p => phaseRow(p, run, now)).join('') : '<div class="hint">no timeline recorded (older run)</div>') +
+    (run && !ps.some(p => p.kind === 'latch') ? '<div class="ph todo"><span class="ic">○</span><span class="lb">Latch check</span><span class="tm"></span></div>' : '') + stepsTable(l);
+  return `<details class="lvl ${run ? 'running' : l.status}${l.outside ? ' outside' : ''}" data-i="${l.index}" ${open ? 'open' : ''}><summary><span class="ic">${ic}</span> ${head}
+    <span class="res">${res}</span>${l.outside ? ' <span class="hint">outside the current range</span>' : ''}</summary>${strip}<div class="tl">${body}</div></details>`;
+}
+function loopHTML(s, now) {
+  const ls = s.levels || [];
+  if (!ls.length) return '<div class="hint">starts after the preparation</div>';
+  return ls.map((l, i) => levelHTML(l, i + 1, !!s.running, now)).join('');
+}
+// "level N of M · elapsed · time left ≈": median measured level × levels to go (the up-front estimate before any level finished)
+function loopHead(s, now, j) {
+  const ls = (s.levels || []).filter(l => !l.outside), st = (s.stages || []).find(x => x.key === 'search') || {};
+  if (!ls.length) return '';
+  const fin = ls.filter(l => !['waiting', 'running'].includes(l.status));
+  const runI = ls.findIndex(l => l.status === 'running');
+  let t = `level ${runI >= 0 ? runI + 1 : fin.length} of ${ls.length}`;
+  if (st.started) t += ' · ' + ago(st.started, st.ended);
+  if (s.running) {
+    const ms = fin.map(l => l.minutes).filter(m => m > 0).sort((a, b) => a - b);
+    const wait = ls.filter(l => l.status === 'waiting').length;
+    let left;
+    if (ms.length) {
+      const med = ms[Math.floor(ms.length / 2)] * (ms.length % 2 ? 1 : 0) + (ms.length % 2 ? 0 : (ms[ms.length / 2 - 1] + ms[ms.length / 2]) / 2);
+      const cur = runI >= 0 ? Math.max(0, med - lvlMin(ls[runI], now)) : 0;
+      left = med * wait + cur;
+    } else left = s.remaining_min;
+    if (left) t += ' · time left ≈ ' + hm(left);
+  }
+  return t;
+}
+$('loop').addEventListener('click', e => {
+  const sm = e.target.closest('summary'); if (!sm) return;
+  const d = sm.parentElement; lvlOpen.set(+d.dataset.i, !d.open);
+});
+$('prep').addEventListener('click', e => { if (e.target.closest('[data-prep]')) { prepOpen = !prepOpen; refresh(); } });
+$('levels').addEventListener('change', () => { $('clear-sel').disabled = !document.querySelector('#levels input.clr:checked'); });
+$('clear-sel').onclick = async () => {
+  const levels = [...document.querySelectorAll('#levels input.clr:checked')].map(c => { const [w, b] = c.dataset.k.split('/'); return { watts: +w, boards: b }; });
+  if (!levels.length) return;
+  const j = await post({ action: 'clear_levels', levels });
+  $('apply-msg').className = 'msg ' + (j.ok ? 'ok' : 'err'); $('apply-msg').textContent = j.ok ? j.cleared + ' rows cleared' : j.error;
+  document.querySelectorAll('#levels input.clr').forEach(c => { c.checked = false; }); refresh(); estimate();
+};
+async function refresh() {
+  let j, st;
+  try { j = await (await fetch('api/wizard', { cache: 'no-store' })).json(); } catch (e) { return; }
+  const s = j.state || {};
+  if (!filled) {
+    const d = j.defaults; filled = true;
+    $('f-min').value = d.min_w; $('f-max').value = d.max_w; $('f-step').value = d.step_w; $('f-fan').value = d.max_fan; $('f-chip').value = d.chip_target;
+    $('f-fan').min = j.limits.min_fan; estimate();
+  }
+  $('wstate').textContent = s.running ? 'running' : (s.stages ? (s.applied ? 'applied' : s.message || 'finished') : 'not run');
+  $('wstate').className = 'pill ' + (s.running ? 'warn' : s.applied ? 'ok' : '');
+  formMode(s);
+  savedRun(s, j.resume);
+  $('start').disabled = !!s.running || !$('f-reset').checked;
+  if (!s.stages) { ['monitor', 'results', 'tuned', 'chipcard'].forEach(id => { $(id).style.display = 'none'; }); return; }
+  $('monitor').style.display = ''; $('results').style.display = '';
+  $('stop').parentElement.style.display = s.running ? '' : 'none';
+  $('live').textContent = s.running ? (s.live || '…') + holdLeft(s) : (s.message || '');
+  $('tuner').innerHTML = s.running ? tunerText(j.tuner, j.live_step, s.live) : '';
+  const ev = (s.events || []).slice().reverse(), shown = evAll ? ev : ev.slice(0, 10);
+  $('evbox').hidden = !ev.length;
+  $('ev-all').hidden = ev.length <= 10; $('ev-all').textContent = evAll ? 'show newest 10' : `show all (${ev.length})`;
+  $('events').innerHTML = shown.map(e => `<div class="e k-${esc(e.kind)}"><span class="tm">${new Date(e.t).toLocaleTimeString()}</span><span>${esc(e.text)}</span></div>`).join('');
+  $('remain').textContent = s.running && s.remaining_min ? '≈ ' + hm(s.remaining_min) + ' left' : '';
+  const now = Date.now() / 1000;
+  $('prep').innerHTML = prepHTML(s, now);
+  $('loop').innerHTML = loopHTML(s, now);
+  $('loop-head').textContent = loopHead(s, now, j);
+  $('final').textContent = s.final_check || '';
+  try { st = await (await fetch('api/status', { cache: 'no-store' })).json(); } catch (e) {}
+  if (st && s.running) {
+    const v = st.volts && st.volts.boards ? Object.values(st.volts.boards).filter(x => x > 1) : [];
+    const ths = st.boards ? Object.values(st.boards).reduce((a, b) => a + (b.ths || b.hashrate || 0), 0) : null;
+    $('now').innerHTML = [['Board voltage', v.length ? (v.reduce((a, b) => a + b, 0) / v.length).toFixed(2) + ' V' : '–'],
+      ['Trim', st.trim ? trimText(st.trim) : 'no trim output'], ['Fan', st.fan_pct != null ? st.fan_pct + ' %' : '–'],
+      ['Power (est. wall)', st.est_wall_w ? '≈ ' + st.est_wall_w + ' W' : '–'], ['Braiins target', st.power_manual_mhz ? 'manual ' + Math.round(st.power_manual_mhz) + ' MHz' : (st.power_target ? st.power_target + ' W' : '–')]]
+      .map(([k, val]) => `<div class="tile"><div class="k">${k}</div><div class="v" style="font-size:20px">${val}</div></div>`).join('');
+  } else { $('now').innerHTML = ''; }
+  $('checks').innerHTML = [s.mod ? `✓ The mod works: <b>${s.mod.stock_v.toFixed(2)} → ${s.mod.v.toFixed(2)} V</b> at ${s.mod.duty} % trim` :
+      s.wiring_dv ? `Wiring: 50 % trim lowered the boards by <b>${s.wiring_dv.toFixed(2)} V</b> ✓` : '',
+    s.floor_v ? `Floor: <b>${s.floor_v.toFixed(2)} V</b> at ${((s.drive_points || []).find(p => p.src === 'floor') || { d: 100 }).d} % trim` : '',
+    s.ranking && s.ranking.length ? `Boards, strongest first at low voltage: <b>${s.ranking.join(' > ')}</b>` : ''].filter(Boolean).join(' &nbsp;·&nbsp; ');
+  lastLevels = s.levels || [];
+  plotCurves((s.curves || []).concat(j.sweep_live ? [j.sweep_live] : []), s.drive_points || [], s.fixed, j.fits || []); // the running sweep draws point by point
+  const fin = (s.levels || []).filter(l => (l.status === 'done' || l.status === 'unsafe') && (l.chosen || s.running));
+  effCurve($('eff'), $('eff-legend'), { stock: fin.map(l => [l.stock_w, l.stock_jth]), trimmed: fin.filter(l => l.v).map(l => [l.est_w, l.est_jth]) });
+  const rows = (s.levels || []).filter(l => !['waiting', 'running'].includes(l.status));
+  $('tuned').style.display = rows.length ? '' : 'none';
+  const sel = new Set([...document.querySelectorAll('#levels input.clr:checked')].map(c => c.dataset.k));
+  $('levels').innerHTML = rows.map(l => { const k = l.watts + '/' + l.boards; return `<tr class="${l.chosen ? 'chosen' : ''}${l.outside ? ' outside' : ''}">
+    <td>${s.running ? '' : `<input type="checkbox" class="clr" data-k="${k}" ${sel.has(k) ? 'checked' : ''} aria-label="clear ${l.watts} W">`}</td>
+    <td>${l.watts} W${l.est_w && Math.abs(l.est_w - l.watts) > 15 ? ' <span class="hint">(≈' + Math.round(l.est_w) + ')</span>' : ''}</td><td>${l.boards}</td>
+    <td class="st-${l.status}">${l.status.replace('_', ' ')}</td><td>${l.target ? l.target + ' W' : '–'}</td>
+    <td>${fmt(l.stock_v, 2)}</td>
+    <td>${l.v ? l.v.toFixed(2) : ((l.status === 'done' || l.status === 'unsafe') ? 'stock' : '–')}</td><td>${l.eff ? (l.eff.new_weak || []).length : '–'}</td><td>${fmt(l.drive, 1)}</td>
+    <td>${fmt(l.ths || l.stock_ths, 1)}</td><td>${fmt(l.stock_jth, 1)} → ${fmt(l.est_jth, 1)}</td><td>${fmt(l.chip_c, 0)}</td>
+    <td>${l.fan ? l.fan + ' %' : '–'}</td><td>${noteIcon([l.outside ? '<span class="warn">outside the current range</span>' : '',
+      l.check ? '<span class="warn">' + esc(l.check) + '</span>' : '', notes(l)].filter(Boolean), k)}</td></tr>`; }).join('');
+  $('clear-sel-row').hidden = !!s.running;
+  $('clear-sel').disabled = !sel.size;
+  cmRefresh(s.levels);
+}
+
+// ---- chip map ----
+let cmLevels = [], cmSnaps = [], cmSel = -1, cmLevelsMeta = [];
+const cmColor = (r, mcr) => mcr <= 0.01 ? '#555' : r >= 0.97 ? '#2f9e44' : r >= 0.9 ? '#e6c200' : r >= 0.7 ? '#e67700' : '#c92a2a';
+function cmDraw() {
+  if (!cmSnaps.length) { $('cm-grid').innerHTML = '<div class="hint">no chip data for this level yet</div>'; $('cm-steps').innerHTML = ''; $('cm-limit').textContent = ''; return; }
+  if (cmSel < 0 || cmSel >= cmSnaps.length) { const f = cmSnaps.findIndex(x => !x.stable); cmSel = f >= 0 ? f : cmSnaps.length - 1; }
+  $('cm-steps').innerHTML = cmSnaps.map((x, i) => `<button class="${i === cmSel ? '' : 'sec'}" data-i="${i}" style="padding:4px 8px;font-size:12px">${x.label}${x.stable ? '' : ' ✕'}</button>`).join('');
+  $('cm-steps').querySelectorAll('button').forEach(b => b.onclick = () => { cmSel = +b.dataset.i; cmDraw(); });
+  const base = cmSnaps[0].chips, cur = cmSnaps[cmSel].chips, worst = [];
+  // physical layout of the 38x2 S19 hashboard (Bitmain repair guide fig. 4-2, front view): 4 bands of domains,
+  // each domain a vertical chip pair; the chain snakes 1->9, 19<-10, 20->29, 38<-30 from the data connector (top left).
+  const pos = D => D <= 8 ? [0, D + 1] : D <= 18 ? [1, 18 - D] : D <= 28 ? [2, D - 19] : [3, 38 - D];
+  $('cm-grid').innerHTML = Object.keys(cur).sort().map(b => {
+    let cells = '<div style="grid-row:1;grid-column:1;font-size:10px;opacity:.6;align-self:center">data<br>conn.</div>' +
+                '<div style="grid-row:7 / span 2;grid-column:1;font-size:10px;opacity:.6;align-self:center">boost</div>';
+    for (let i = 0; i < 76; i++) {
+      const d = i >> 1, [band, col] = pos(d), row = band * 2 + (i & 1);
+      const m = cur[b][i], m0 = (base[b] || [])[i] || 1, r = m0 > 0 ? m / m0 : 0;
+      if (cmSel > 0) worst.push({ b, i, d, r, m });
+      cells += `<div title="board ${b}, domain ${d} (guide #${d + 1}), chip ${i}: ${(r * 100).toFixed(0)} % of its stock work" style="background:${cmColor(r, m)};grid-row:${row + 1 + Math.floor(row / 2) * 0};grid-column:${col + 1};height:16px;border-radius:2px;margin-bottom:${row % 2 ? 7 : 0}px"></div>`;
+    }
+    return `<div style="margin:8px 0"><div class="hint">Board ${b} — front view, air in on the right → out on the left</div>
+      <div style="display:grid;grid-template-columns:repeat(5,1.3fr) repeat(5,1fr);gap:2px 4px;max-width:520px">${cells}</div></div>`;
+  }).join('');
+  worst.sort((a, b) => a.r - b.r);
+  $('cm-limit').innerHTML = cmSel > 0 && worst.length ? 'Weakest at ' + cmSnaps[cmSel].label + ': ' +
+    worst.slice(0, 6).map(w => `board ${w.b} chip ${w.i} (domain ${w.d}) ${(w.r * 100).toFixed(0)} %`).join(' · ') : '';
+}
+async function cmLoad(i) {
+  const lv = cmLevels[i]; if (lv == null) return;
+  const meta = cmLevelsMeta.find(l => l.index === lv) || {};
+  $('cm-level-lbl').textContent = meta.watts ? `${meta.watts} W, boards ${meta.boards}` : 'level ' + lv;
+  const j = await (await fetch('api/wizard/chips?level=' + lv, { cache: 'no-store' })).json();
+  cmSnaps = j.snaps || []; cmSel = -1; cmDraw();
+}
+$('cm-level').addEventListener('input', e => cmLoad(+e.target.value));
+async function cmRefresh(levels) {
+  cmLevelsMeta = levels || [];
+  const j = await (await fetch('api/wizard/chips', { cache: 'no-store' })).json();
+  const idx = (j.levels || []).sort((a, b) => ((cmLevelsMeta[a] || {}).watts || 0) - ((cmLevelsMeta[b] || {}).watts || 0) || a - b);
+  $('chipcard').style.display = idx.length ? '' : 'none';
+  const changed = idx.join() !== cmLevels.join(); cmLevels = idx;
+  $('cm-level').max = Math.max(0, idx.length - 1);
+  if (changed && idx.length) { if (+$('cm-level').value >= idx.length) $('cm-level').value = idx.length - 1; cmLoad(+$('cm-level').value); }
+}
+refresh(); setInterval(refresh, 5000);
+</script>
+</body>
+</html>

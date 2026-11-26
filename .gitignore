@@ -1,0 +1,8 @@
+installer/bin/
+*-arm
+*.bak
+cmd/s19volt/s19volt
+
+# internal working notes (kept locally, not published)
+docs/STATUS.md
+docs/REVIEW-*.md
