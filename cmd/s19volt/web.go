@@ -12,12 +12,10 @@
 package main
 
 import (
-	"bytes"
 	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"log"
 	"math"
@@ -35,7 +33,6 @@ import (
 var uiFS embed.FS
 
 type webConfig struct {
-	BosURL     string `json:"bos_url"`  // default http://127.0.0.1/api/v1
 	BosUser    string `json:"bos_user"` // default root
 	BosPass    string `json:"bos_pass"`
 	UIPassword string `json:"ui_password"` // optional: empty = controls open on the LAN (default); set = X-Auth required
@@ -43,11 +40,8 @@ type webConfig struct {
 }
 
 var (
-	wcfg     webConfig
-	httpc    = &http.Client{Timeout: 10 * time.Second}
-	bosMu    sync.Mutex
-	bosTok   string
-	bosTokAt time.Time
+	wcfg  webConfig
+	httpc = &http.Client{Timeout: 10 * time.Second}
 
 	stCacheMu sync.Mutex
 	stCache   map[string]interface{}
@@ -58,7 +52,7 @@ var (
 )
 
 func loadWebConfig(path string) {
-	wcfg = webConfig{BosURL: "http://127.0.0.1/api/v1", BosUser: "root", Levels: []int{360, 380, 450, 520, 700, 800, 900, 1000, 1100, 1200, 1300,
+	wcfg = webConfig{BosUser: "root", Levels: []int{360, 380, 450, 520, 700, 800, 900, 1000, 1100, 1200, 1300,
 		1400, 1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200}}
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -118,63 +112,6 @@ func controllerNow() map[string]interface{} {
 	who := setupWho
 	coreMu.Unlock()
 	return controllerState(who, a, t, time.Now())
-}
-
-// ---- bosminer REST (token cached; it refreshes on every call, timeout 3600 s) ----
-
-func bosLogin() (string, error) {
-	body, _ := json.Marshal(map[string]string{"username": wcfg.BosUser, "password": wcfg.BosPass})
-	resp, err := httpc.Post(wcfg.BosURL+"/auth/login", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	var r struct{ Token string }
-	if err = json.NewDecoder(resp.Body).Decode(&r); err != nil || r.Token == "" {
-		return "", fmt.Errorf("login failed (%d)", resp.StatusCode)
-	}
-	return r.Token, nil
-}
-
-func bos(method, path string, body interface{}) (json.RawMessage, error) {
-	for attempt := 0; attempt < 2; attempt++ {
-		bosMu.Lock()
-		if bosTok == "" || time.Since(bosTokAt) > 30*time.Minute || attempt == 1 {
-			t, err := bosLogin()
-			if err != nil {
-				bosMu.Unlock()
-				return nil, err
-			}
-			bosTok, bosTokAt = t, time.Now()
-		}
-		tok := bosTok
-		bosMu.Unlock()
-		var rd io.Reader
-		if body != nil {
-			b, _ := json.Marshal(body)
-			rd = bytes.NewReader(b)
-		}
-		req, _ := http.NewRequest(method, wcfg.BosURL+path, rd)
-		req.Header.Set("Authorization", tok)
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := httpc.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		raw, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode == 401 && attempt == 0 {
-			continue
-		}
-		if resp.StatusCode >= 300 {
-			return nil, fmt.Errorf("%s %s: %d %s", method, path, resp.StatusCode, strings.TrimSpace(string(raw)))
-		}
-		if len(raw) == 0 {
-			raw = []byte("null")
-		}
-		return raw, nil
-	}
-	return nil, errors.New("unauthorized")
 }
 
 // ---- local readings shared with the existing endpoints ----

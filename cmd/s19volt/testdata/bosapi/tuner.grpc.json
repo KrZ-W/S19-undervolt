@@ -1,0 +1,20 @@
+{
+  "overallTunerState": "TUNER_STATE_TUNING",
+  "powerTargetModeState": {
+    "profile": {
+      "created": "2026-11-27T13:51:29.441834106Z",
+      "target": {
+        "watt": "2000"
+      },
+      "measuredHashrate": {
+        "gigahashPerSecond": 74808.68845926001
+      },
+      "estimatedPowerConsumption": {
+        "watt": "1924"
+      }
+    },
+    "currentTarget": {
+      "watt": "2000"
+    }
+  }
+}

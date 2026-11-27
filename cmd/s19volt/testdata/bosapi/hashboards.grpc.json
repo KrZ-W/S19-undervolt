@@ -1,0 +1,184 @@
+{
+  "hashboards": [
+    {
+      "id": "1",
+      "enabled": true,
+      "chipsCount": 76,
+      "currentVoltage": {
+        "volt": 11.93896
+      },
+      "currentFrequency": {
+        "hertz": 5.27250665e+08
+      },
+      "highestChipTemp": {
+        "id": 1,
+        "location": "SENSOR_LOCATION_CHIP",
+        "temperature": {
+          "degreeC": 71.5
+        }
+      },
+      "boardTemp": {
+        "degreeC": 56.5
+      },
+      "stats": {
+        "realHashrate": {
+          "last5s": {
+            "gigahashPerSecond": 24116.742651254066
+          },
+          "last15s": {
+            "gigahashPerSecond": 24058.731673934504
+          },
+          "last30s": {
+            "gigahashPerSecond": 24934.22281985689
+          },
+          "last1m": {
+            "gigahashPerSecond": 25027.34295363328
+          },
+          "last5m": {
+            "gigahashPerSecond": 25021.19234121168
+          },
+          "last15m": {
+            "gigahashPerSecond": 24654.620842131408
+          },
+          "last30m": {
+            "gigahashPerSecond": 18761.944248419913
+          },
+          "last1h": {
+            "gigahashPerSecond": 9380.972124209957
+          },
+          "last24h": {
+            "gigahashPerSecond": 390.8738385087482
+          },
+          "sinceRestart": {
+            "gigahashPerSecond": 26510.251982581038
+          }
+        },
+        "nominalHashrate": {
+          "gigahashPerSecond": 24964.26448642
+        },
+        "errorHashrate": {},
+        "bestShare": "26793420"
+      }
+    },
+    {
+      "id": "2",
+      "enabled": true,
+      "chipsCount": 76,
+      "currentVoltage": {
+        "volt": 11.987919999999999
+      },
+      "currentFrequency": {
+        "hertz": 5.2547434899999994e+08
+      },
+      "highestChipTemp": {
+        "id": 2,
+        "location": "SENSOR_LOCATION_CHIP",
+        "temperature": {
+          "degreeC": 72
+        }
+      },
+      "boardTemp": {
+        "degreeC": 57
+      },
+      "stats": {
+        "realHashrate": {
+          "last5s": {
+            "gigahashPerSecond": 22959.394807264813
+          },
+          "last15s": {
+            "gigahashPerSecond": 24476.5007568649
+          },
+          "last30s": {
+            "gigahashPerSecond": 24029.117894578263
+          },
+          "last1m": {
+            "gigahashPerSecond": 24333.17370711033
+          },
+          "last5m": {
+            "gigahashPerSecond": 24272.176068697605
+          },
+          "last15m": {
+            "gigahashPerSecond": 23466.08814843771
+          },
+          "last30m": {
+            "gigahashPerSecond": 17758.945307969694
+          },
+          "last1h": {
+            "gigahashPerSecond": 8879.472653984847
+          },
+          "last24h": {
+            "gigahashPerSecond": 369.9780272493686
+          },
+          "sinceRestart": {
+            "gigahashPerSecond": 19044.98312238554
+          }
+        },
+        "nominalHashrate": {
+          "gigahashPerSecond": 24880.15948642
+        },
+        "errorHashrate": {},
+        "bestShare": "21414119"
+      }
+    },
+    {
+      "id": "3",
+      "enabled": true,
+      "chipsCount": 76,
+      "currentVoltage": {
+        "volt": 11.93896
+      },
+      "currentFrequency": {
+        "hertz": 5.27250665e+08
+      },
+      "highestChipTemp": {
+        "id": 3,
+        "location": "SENSOR_LOCATION_CHIP",
+        "temperature": {
+          "degreeC": 69
+        }
+      },
+      "boardTemp": {
+        "degreeC": 54
+      },
+      "stats": {
+        "realHashrate": {
+          "last5s": {
+            "gigahashPerSecond": 24947.91486763272
+          },
+          "last15s": {
+            "gigahashPerSecond": 25602.570220384587
+          },
+          "last30s": {
+            "gigahashPerSecond": 25740.336315850138
+          },
+          "last1m": {
+            "gigahashPerSecond": 25369.92859652015
+          },
+          "last5m": {
+            "gigahashPerSecond": 25120.56621694393
+          },
+          "last15m": {
+            "gigahashPerSecond": 24518.03106142704
+          },
+          "last30m": {
+            "gigahashPerSecond": 18606.790940944666
+          },
+          "last1h": {
+            "gigahashPerSecond": 9303.395470472333
+          },
+          "last24h": {
+            "gigahashPerSecond": 387.6414779363472
+          },
+          "sinceRestart": {
+            "gigahashPerSecond": 23973.30322695054
+          }
+        },
+        "nominalHashrate": {
+          "gigahashPerSecond": 24964.26448642
+        },
+        "errorHashrate": {},
+        "bestShare": "7730403"
+      }
+    }
+  ]
+}

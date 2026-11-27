@@ -20,7 +20,7 @@ stock voltage for the same heat.
 
 ## Results
 
-S19, Braiins OS+ 26.11, measured at the wall. Each level at its best stable voltage, checked for latched chips.
+S19, measured at the wall on Braiins OS+ 26.11 (before the move to 25.01; a 25.01 run will replace this table). Each level at its best stable voltage, checked for latched chips.
 
 | Setup | Wall | TH/s | J/TH | Board V |
 |---|---|---|---|---|
@@ -41,7 +41,7 @@ version (V2, driven by the control board) reaches the same voltages. Below ~560 
 
 - An Antminer S19 with an **APW121215** PSU (12–15 V family, revisions a–g).
 - A **Xilinx Zynq** control board with an empty 4th hashboard connector (tested: AMCB07_4X1_4F_S_VER2.3).
-- **Braiins OS+** on that board (tested: 26.11 nightly).
+- **Braiins OS+ 25.01** (stable SD image, the only supported firmware; see [INSTALL.md](docs/INSTALL.md#requirements)).
 - Parts: PC817 optocoupler, 33 kΩ and 4.7 kΩ resistors, 470–1000 µF capacitor, two Dupont wires.
 - A soldering iron, a multimeter, and a Linux or macOS PC with Go to build the software.
 
@@ -79,8 +79,8 @@ After that, a thermostat or an automation sets the level with `POST /api/level {
 | Control board Xilinx Zynq C87 | should work; verify with `ch3test` |
 | Other Zynq boards (C52/C55/C71) | unknown; `ch3test` refuses on a mismatch |
 | BeagleBone, Amlogic, CVITEK, BCB100 | not supported |
-| Braiins OS+ 26.11 nightly | tested |
-| Braiins OS+ 26.10 stable | expected to work, not tested |
+| Braiins OS+ 25.01 (stable SD, bosminer md5 `10ed4f27…`) | supported (the installer refuses anything else) |
+| Any other Braiins OS+ version | not supported |
 | Stock Antminer firmware, other firmwares | not supported (the output pin comes from Braiins' FPGA design) |
 
 Details: [PSU compatibility](docs/PSU-MOD.md#psu-compatibility) and

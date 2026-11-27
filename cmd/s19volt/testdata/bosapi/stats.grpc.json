@@ -1,0 +1,57 @@
+{
+  "poolStats": {
+    "acceptedShares": "59",
+    "rejectedShares": "1",
+    "lastDifficulty": "131072",
+    "bestShare": "26793420",
+    "generatedWork": "58751096",
+    "lastShareTime": "2026-11-27T14:16:34.325154754Z"
+  },
+  "minerStats": {
+    "realHashrate": {
+      "last5s": {
+        "gigahashPerSecond": 71048.52569139325
+      },
+      "last15s": {
+        "gigahashPerSecond": 74749.19418883791
+      },
+      "last30s": {
+        "gigahashPerSecond": 75303.13374376958
+      },
+      "last1m": {
+        "gigahashPerSecond": 74538.44049022217
+      },
+      "last5m": {
+        "gigahashPerSecond": 74406.22012518701
+      },
+      "last15m": {
+        "gigahashPerSecond": 72619.98774561998
+      },
+      "last30m": {
+        "gigahashPerSecond": 55131.956375902344
+      },
+      "last1h": {
+        "gigahashPerSecond": 27565.978187951172
+      },
+      "last24h": {
+        "gigahashPerSecond": 1148.5824244979656
+      },
+      "sinceRestart": {
+        "gigahashPerSecond": 68878.88476153833
+      }
+    },
+    "nominalHashrate": {
+      "gigahashPerSecond": 74808.68845926001
+    },
+    "errorHashrate": {},
+    "bestShare": "26793420"
+  },
+  "powerStats": {
+    "approximatedConsumption": {
+      "watt": "1924"
+    },
+    "efficiency": {
+      "joulePerTerahash": 25.81796200368201
+    }
+  }
+}

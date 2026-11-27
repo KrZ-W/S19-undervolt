@@ -489,11 +489,9 @@ func cmdRewrite(args []string) {
 }
 
 // ---------------- live fan target (bosminer's own manual-mode setpoint, in its memory) ----------------
-// Found 2026-11-17: bosminer's fan loop re-reads the manual fan % every tick from a config struct
-// on its heap; the one live copy sat at 0xb59c99d4 (stable across restarts so far). Layout around the
-// u32 target T: T,0,0x1f,0,1,minfans(4),2000,600,…,f32 target°C,hot? — we match the f32 run
-// 40,159,80,110,45 (target, dangerous, hot, …) located 48 bytes after T, plus T==this config's value
-// range. Changing T makes bosminer's own loop drive the PWM (safety overrides untouched).
+// bosminer's fan loop re-reads the manual fan % every tick from a config struct on its heap. In bosminer 25.01
+// the struct holds the f32 temperatures target, dangerous, hot, 0, then the u32 fan % T, then min_fans, min_fan_rpm,
+// rpm_epsilon (fanLayouts). Changing T makes bosminer's own loop drive the PWM (safety overrides untouched).
 // the hot °C (3rd float) is user-tunable, so it is matched as a range, not a value
 func f32s(fs ...float32) []byte {
 	b := make([]byte, 4*len(fs))
@@ -508,6 +506,13 @@ func f32s(fs ...float32) []byte {
 // every bosminer start (heap), so it is searched, then cached per bosminer pid. A candidate is only trusted when
 // bosminer's fan loop follows a write on the hardware PWM register (fanset) — nothing is assumed from layout.
 type tempCfg struct{ target, hot, dangerous float32 }
+
+// fanLayouts: where target_temp+dangerous_temp (sig) and hot_temp sit relative to the live fan target in
+// bosminer 25.01 (the supported build): temperatures first (target, dangerous, hot, 0), the fan speed 0x10 after
+// target_temp, then min_fans, min_fan_rpm, rpm_epsilon (read-only memory scan, 2026-11-27).
+var fanLayouts = []struct{ sig, hot int64 }{
+	{sig: -0x10, hot: -0x08},
+}
 
 func readTempCfg() (tempCfg, error) {
 	b, err := os.ReadFile("/etc/bosminer.toml")
@@ -570,14 +575,21 @@ func fanCandidates(pid int, useCache bool) ([]uint64, *os.File, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	// check: t holds a fan target (<= 100 %) with this miner's temperatures where one of the known layouts puts them
 	check := func(t uint64) bool {
-		buf := make([]byte, 0x40)
-		if _, err := f.ReadAt(buf, int64(t)); err != nil {
-			return false
+		for _, l := range fanLayouts {
+			buf := make([]byte, 0x80)
+			if _, err := f.ReadAt(buf, int64(t)+l.sig-0x40); err != nil {
+				continue
+			}
+			at := func(off int64) []byte { return buf[0x40+off-l.sig:] }
+			hot := math.Float32frombits(binary.LittleEndian.Uint32(at(l.hot)))
+			if binary.LittleEndian.Uint32(at(0)) <= 100 && string(at(l.sig)[:8]) == string(sig) &&
+				(cfg.hot == 0 || hot == cfg.hot) {
+				return true
+			}
 		}
-		hot := math.Float32frombits(binary.LittleEndian.Uint32(buf[0x34:]))
-		return binary.LittleEndian.Uint32(buf[0:]) <= 100 && string(buf[0x2c:0x34]) == string(sig) &&
-			(cfg.hot == 0 || hot == cfg.hot)
+		return false
 	}
 	// bosminer keeps many copies of these settings (about a dozen seen) and recreates the live one on some
 	// events (pause/resume, reloads): a cached address can still pass check() yet be dead. Callers retry
@@ -608,8 +620,10 @@ func fanCandidates(pid int, useCache bool) ([]uint64, *os.File, error) {
 			if i < 0 {
 				break
 			}
-			if t := lo + uint64(off+i) - 0x2c; off+i >= 0x2c && check(t) {
-				out = append(out, t)
+			for _, l := range fanLayouts {
+				if t := int64(lo) + int64(off+i) - l.sig; t > int64(lo) && check(uint64(t)) {
+					out = append(out, uint64(t))
+				}
 			}
 			off += i + 1
 		}

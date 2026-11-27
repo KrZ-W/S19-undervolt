@@ -1,0 +1,30 @@
+{
+  "fans": [
+    {
+      "position": 0,
+      "rpm": 2520,
+      "targetSpeedRatio": 0.3
+    },
+    {
+      "position": 1,
+      "rpm": 2520,
+      "targetSpeedRatio": 0.3
+    },
+    {
+      "position": 2,
+      "rpm": 2460,
+      "targetSpeedRatio": 0.3
+    },
+    {
+      "position": 3,
+      "rpm": 2400,
+      "targetSpeedRatio": 0.3
+    }
+  ],
+  "highestTemperature": {
+    "location": "SENSOR_LOCATION_CHIP",
+    "temperature": {
+      "degreeC": 72
+    }
+  }
+}

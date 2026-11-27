@@ -12,11 +12,15 @@ Items marked **not built** or **untested** are exactly that. Do not rely on them
 - Antminer S19 with an APW121215 PSU and the trim mod ([PSU-MOD.md](PSU-MOD.md)).
 - A Xilinx Zynq control board. Tested: AMCB07_4X1_4F_S_VER2.3. See
   [control board compatibility](PSU-MOD.md#control-board-compatibility).
-- **Braiins OS+**, with `bosminer` running and the miner hashing.
-  - Tested: `2026-10-19-0-b3bb8db3-26.11-plus-nightly`, platform `zynq-bm3-am2`.
-  - Stable 26.10: expected to work (same REST endpoints), not tested yet.
+- **Braiins OS+ 25.01, SD-card image — the only supported firmware.** The installer refuses anything else.
+  - Image: `sd-firmware_2025-02-21-0-e05df053-25.01-plus_arm_cortex-a9_neon.tar` from
+    `https://feeds.braiins-os.com/am2-s17/` (sha256 `869ffe82000fd1b76fa717bd3090d1a71eef39fd7a6da97d10644c1f8b4b890b`).
+    It is the last stable SD release for the S19; newer stable releases ship only for the internal NAND.
+  - Its stock `bosminer` (md5 `10ed4f2707b9ad44f043e52b92ed7b54`): `s19volt` uses its gRPC API (1.4.0) and patches it
+    in RAM to serve per-chip data (see [Per-chip data](#per-chip-data)).
+  - Set your pools, then let the miner hash. Do not upgrade Braiins afterwards (the installer turns auto-upgrade off).
 - Root SSH access to the miner (the Braiins root password).
-- The Braiins web/API login (the installer asks for it; `s19volt` uses the local REST API).
+- The Braiins login (the installer asks for it; `s19volt` uses the local gRPC API).
 
 **On your PC**
 
@@ -64,9 +68,14 @@ cd installer
 
 It asks for the miner's root password once (one shared SSH connection), then:
 
-1. **Checks the miner.** Stops unless the firmware is Braiins OS+ (`/etc/bos_version` contains `plus`), the platform
-   is `zynq-*` (`/etc/bos_platform`), and `bosminer` is running.
-2. **Backs up an existing install** to `/etc/s19volt.bak-<date>` and stops the old service.
+1. **Checks the miner.** Stops, changing nothing, unless `/etc/bos_version` is exactly
+   `2025-02-21-0-e05df053-25.01-plus` and the stock bosminer's md5 is `10ed4f2707b9ad44f043e52b92ed7b54`, and `bosminer`
+   is running.
+   - **No power target:** a fresh Braiins install has none and runs the miner at full power (~3.2 kW on an S19).
+     The installer asks for one (default 1000 W, kept until the setup wizard runs) and sets it in
+     `[autotuning]` of `/etc/bosminer.toml` (original kept as `/etc/bosminer.toml.pre-target`).
+2. **Backs up an existing install's settings** (`*.json`, not the binaries) to `/etc/s19volt.bak-<date>`, removes older
+   backups (the SD overlay is only ~55 MB) and stops the old service.
 3. **Copies the binaries** to `/etc/s19volt/`.
 4. **Checks the trim output** with `ch3test detect`. If the control board is not the tested layout, `s19volt` runs
    **without trim** (stock voltage only).
@@ -76,8 +85,11 @@ It asks for the miner's root password once (one shared SSH connection), then:
    - Payout wallet/account to guard against a pool hijack (empty = off).
    - Live fan control (default yes, see below).
    - Webhook URL for alerts, e.g. a Home Assistant webhook (empty = off).
-6. **Writes the config** and the boot script, enables and starts the service.
-7. **Self-test:** checks that `http://127.0.0.1:8090/api/status` answers on the miner.
+6. **Turns Braiins' auto-upgrade off** (an upgrade would leave the supported build).
+7. **Applies the per-chip patch** and waits until the per-chip metrics are served (else it undoes the patch and stops).
+8. **Writes the config** and the boot script, enables and starts the service. Live fan control that does not find
+   bosminer's fan setting stops the install.
+9. **Self-test:** checks that `http://127.0.0.1:8090/api/status` answers on the miner.
 
 ### What the installer changes
 
@@ -87,7 +99,20 @@ It asks for the miner's root password once (one shared SSH connection), then:
 | `/etc/init.d/s19volt` | boot script (procd, start priority 99, respawn) |
 | `/etc/bosminer.toml` | only with live fan control: `mode = "manual"` in `[temp_control]` (see below) |
 | `/etc/s19volt/bosminer.toml.pre-install` | copy of `bosminer.toml` before that change |
-| `/lib/upgrade/keep.d/s19volt` | asks the firmware to keep the files above across upgrades — **untested** |
+| `/etc/init.d/s19volt-bospatch` | boot script (start 90, before bosminer): the per-chip patch, RAM only |
+| `bos.auto_upgrade.enable` (uci) | set to 0; `uninstall.sh` sets it back to 1 |
+
+No upgrade keep list on purpose: a Braiins upgrade leaves the supported build and removes `s19volt` (stock miner).
+
+### Per-chip data
+
+`bosminer` 25.01 computes per-chip hashrate, shares and frequency and the measured board voltages, but registers them
+in a private metrics registry that its Prometheus page (`:8081`) never serves. The wizard needs them (weak chips,
+latch check, chip map, trim readout). `bospatch.sh` copies `/rom/usr/bin/bosminer` to RAM (`/tmp`), changes 4
+instructions (`add r0, sp, #0x60` → `mov r0, fp`: register those 4 metrics in the served registry, file offsets
+`0x8ac124 0x8ac218 0x8ac24c 0x8ac27c`), and bind-mounts the copy over `/usr/bin/bosminer`. It runs at every boot
+before `bosminer` starts, refuses any other bosminer build, and checks each original instruction before changing it.
+The flash is never written: removing the boot script and rebooting (or `uninstall.sh`) gives the stock `bosminer`.
 
 Nothing else in Braiins OS+ is changed. An existing `core.json` is kept, so a reinstall keeps your level table.
 
@@ -292,7 +317,7 @@ checks for. It refuses to drive anything, so the miner stays at stock voltage. S
 [control board compatibility](PSU-MOD.md#control-board-compatibility).
 
 **A power target is not accepted.** Braiins has a minimum power target (~360 W on the test miner); the software
-reads it from `GET /api/v1/configuration/constraints` and clamps levels to it. A level change retries the power
+reads it from `ConfigurationService/GetConstraints` and clamps levels to it. A level change retries the power
 target until bosminer accepts it. If it never does, check the Braiins login in `/etc/s19volt/web.json` and the
 bosminer log (`logread -e bosminer`).
 
