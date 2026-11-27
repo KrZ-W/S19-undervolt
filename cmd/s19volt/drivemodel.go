@@ -62,12 +62,11 @@ func fitShape(pts []calPoint) (shapeFit, bool) {
 	if len(xs) < 2 {
 		return shapeFit{}, false
 	}
-	med := append([]float64(nil), ys...) // 3-point median
-	for i := 1; i+1 < len(ys); i++ {
-		a := []float64{ys[i-1], ys[i], ys[i+1]}
-		sort.Float64s(a)
-		med[i] = a[1]
-	}
+	// Smoothing: a sliding quadratic least-squares fit over smoothHalf points each side (owner 2026-11-26: single
+	// stale or noisy readings left one-step stalls in the curve — 9.70 -> 9.68 V and 8.963 -> 8.961 V on a 2 %
+	// sweep — that the old 3-point median kept). On that sweep it gives even steps (~-0.2 V per 2 %), keeps the
+	// knee into the floor, residual sd 0.027 V. The monotone pass below then removes any wiggle left.
+	med := smoothQuad(xs, ys, smoothHalfV)
 	// PAVA (non-increasing): blocks of (mean, count, drive sum)
 	type blk struct{ v, n, xs float64 }
 	var bs []blk
@@ -287,6 +286,66 @@ func driveFits(s wizState) []driveFit {
 			f.Pts = append(f.Pts, [2]float64{d, math.Round(m.V(d, float64(w))*1000) / 1000})
 		}
 		out = append(out, f)
+	}
+	return out
+}
+
+// smoothHalf: points each side in the sliding quadratic fit (7-point window on a 2 % sweep = +/-6 % drive).
+const smoothHalf = 3
+
+// smoothHalfV: the half-window in use (a var so tests can compare; 0 = 3-point median, the old fit).
+var smoothHalfV = smoothHalf
+
+// smoothQuad: each y replaced by the value at its x of a least-squares quadratic through the points within h
+// each side (fewer at the ends; fewer than 3 points or a singular fit = the value is kept).
+func smoothQuad(xs, ys []float64, h int) []float64 {
+	out := append([]float64(nil), ys...)
+	if h == 0 { // the old 3-point median
+		for i := 1; i+1 < len(ys); i++ {
+			a := []float64{ys[i-1], ys[i], ys[i+1]}
+			sort.Float64s(a)
+			out[i] = a[1]
+		}
+		return out
+	}
+	for i := range xs {
+		lo, hi := i-h, i+h
+		if lo < 0 {
+			lo = 0
+		}
+		if hi > len(xs)-1 {
+			hi = len(xs) - 1
+		}
+		if hi-lo+1 < 3 {
+			continue
+		}
+		// normal equations for y = a + b·u + c·u², u = x - xs[i] (centred: the value at xs[i] is a)
+		var s [5]float64
+		var t [3]float64
+		for j := lo; j <= hi; j++ {
+			u := xs[j] - xs[i]
+			p := 1.0
+			for k := 0; k < 5; k++ {
+				s[k] += p
+				if k < 3 {
+					t[k] += p * ys[j]
+				}
+				p *= u
+			}
+		}
+		m := [3][3]float64{{s[0], s[1], s[2]}, {s[1], s[2], s[3]}, {s[2], s[3], s[4]}}
+		det := func(m [3][3]float64) float64 {
+			return m[0][0]*(m[1][1]*m[2][2]-m[1][2]*m[2][1]) - m[0][1]*(m[1][0]*m[2][2]-m[1][2]*m[2][0]) + m[0][2]*(m[1][0]*m[2][1]-m[1][1]*m[2][0])
+		}
+		d := det(m)
+		if math.Abs(d) < 1e-12 {
+			continue
+		}
+		ma := m
+		for r := 0; r < 3; r++ {
+			ma[r][0] = t[r]
+		}
+		out[i] = det(ma) / d // Cramer: the constant term a
 	}
 	return out
 }

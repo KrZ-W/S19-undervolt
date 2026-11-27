@@ -6,7 +6,6 @@ package main
 
 import (
 	"fmt"
-	"time"
 
 	"s19psu/ch3"
 )
@@ -45,18 +44,14 @@ func setupTrimDriver() {
 	fmt.Printf("trim: gpio%d, PWM %d Hz, starts at 0 %%\n", pin.GPIO, pwmHz)
 }
 
-// shutdownGlide caps the exit glide: a stop/kill must not hang (init gives a service ~1-2 min).
-const shutdownGlide = 60 * time.Second
-
-// closeTrimDriver on exit: glide toward 0 % at the setup pace (5 % per 2 s) for at most shutdownGlide, then
-// force the pin LOW (stock voltage) whatever is left.
+// closeTrimDriver on exit: the trim straight to 0 % (pin LOW, stock voltage), then the pin released.
 func closeTrimDriver() {
 	if drv == nil {
 		return
 	}
-	t0 := time.Now()
-	if err := glide(0, plainSleep, func() bool { return time.Since(t0) >= shutdownGlide }); err != nil {
-		fmt.Println("trim: exit glide:", err, "- forcing the pin LOW")
-	}
+	// Straight to 0 (pin LOW = stock voltage) at once, no glide: raising the voltage is always safe, and the init
+	// system kills a process that is not gone ~5 s after SIGTERM — a glide (up to a minute) was cut mid-way and
+	// left the pin in an unknown state with the boards hashing (2026-11-26 20:27, trim was at 64 %).
+	drv.SetNow(0)
 	drv.p.Close()
 }

@@ -123,7 +123,12 @@ var (
 	decisions  []string
 
 	changeReq = make(chan int, 1)
-	fanStart  int // a level's base fan for the fan rule to start from (changeLevel -> fanLoop); guarded by coreMu
+
+	// trim watchdog (trimWatch): trimOnAt = when the trim last came on for a level (zero = off); trimHeldAt = when
+	// it was taken off because Braiins left stage 4 (zero = not held). A held trim comes back (trimLoop) after a
+	// stage-4 round after trimHeldAt with every board hashing. Guarded by coreMu.
+	trimOnAt, trimHeldAt time.Time
+	fanStart             int // a level's base fan for the fan rule to start from (changeLevel -> fanLoop); guarded by coreMu
 
 	fanSt = fanRule{pct: -1} // the fan rule's state (fanLoop only)
 	capSt = struct {
@@ -492,6 +497,9 @@ func changeTo(w int, e levelEntry, beforeResume func()) (reached bool, err error
 	note("change -> %d W (boards %s, %.2f V)", w, e.B, e.V)
 	setPhase("trim to 0")
 	coreMu.Lock()
+	trimOnAt, trimHeldAt = time.Time{}, time.Time{}
+	coreMu.Unlock()
+	coreMu.Lock()
 	targetV = 0
 	coreMu.Unlock()
 	if drv != nil {
@@ -556,6 +564,7 @@ func changeTo(w int, e levelEntry, beforeResume func()) (reached bool, err error
 	setPhase("settle")
 	// Braiins must have FINISHED its tune for this target before any trim: wait for a stage-4 ("S4") round
 	// logged after this change started (a fresh tune takes ~12 min, more at high power; a saved one is quick).
+	// No settled-round wait on top (owner rule, 8a59cd7: a saved tune loads straight back into stage 4).
 	if !waitStage4(w, changeStart, 30*time.Minute) {
 		if stopping() { // a setup run was stopped while Braiins tuned: leave now (the deferred resume runs)
 			return false, wizStopped{}
@@ -592,6 +601,9 @@ func changeTo(w int, e levelEntry, beforeResume func()) (reached bool, err error
 		glideZero()
 		return false, nil
 	}
+	coreMu.Lock()
+	trimOnAt = time.Now()
+	coreMu.Unlock()
 	note("at %d W", w)
 	return true, nil
 }
@@ -670,6 +682,7 @@ func idle() bool { coreMu.Lock(); defer coreMu.Unlock(); return phase == "idle" 
 func trimLoop() {
 	for {
 		time.Sleep(20 * time.Second)
+		trimBack()
 		coreMu.Lock()
 		tv := targetV
 		coreMu.Unlock()
@@ -700,16 +713,116 @@ func trimLoop() {
 			}
 			continue
 		}
-		err := r.volts - tv
-		if math.Abs(err) <= 0.03 {
+		// No voltage chasing: the level's trim LEVEL (drive) from the table is held as it is (owner rule). A loop
+		// that chased the table voltage fought Braiins whenever it moved the PSU, and on 2026-11-26 it pushed the
+		// trim from 36.8 % to 50 % on boards that had stopped hashing (9.03 V read).
+	}
+}
+
+// trimBack: a trim the watchdog took off comes back at the level's table drive once Braiins has logged a
+// stage-4 round after it was taken off and every board hashes (trimLoop calls it every 20 s).
+func trimBack() {
+	coreMu.Lock()
+	held, eff := trimHeldAt, effective
+	coreMu.Unlock()
+	if held.IsZero() || eff <= 0 || ccfg.Trim != "live" || drv == nil || !idle() || setupRunning() {
+		return
+	}
+	e, ok := ccfg.Levels[strconv.Itoa(eff)]
+	if !ok || e.V <= 0 || e.D <= 0 {
+		return
+	}
+	r := read()
+	if !r.ok || !r.mining {
+		return
+	}
+	stMu.Lock()
+	back := tune.stage4Since(r.target, held)
+	stMu.Unlock()
+	if !back || r.minRate <= float64(r.target)/1000*2.4 {
+		return
+	}
+	note("trim watchdog: Braiins back in stage 4 at %d W - trim back to the level's %.1f %%", r.target, e.D)
+	coreMu.Lock()
+	targetV, trimHeldAt = e.V, time.Time{}
+	coreMu.Unlock()
+	gate := float64(r.target) / 1000 * 2.4
+	if err := glide(e.D, plainSleep, func() bool { x := read(); return x.ok && x.minRate < gate*0.6 }); err != nil {
+		note("trim watchdog: trim back stopped (%v) - stock voltage", err)
+		coreMu.Lock()
+		targetV, trimHeldAt = 0, time.Now()
+		coreMu.Unlock()
+		glideZero()
+		return
+	}
+	coreMu.Lock()
+	trimOnAt = time.Now()
+	coreMu.Unlock()
+}
+
+// trimWatch is the trim watchdog: while the trim is on (outside a setup run) and Braiins leaves stage 4 — a
+// retune ("profile failed, retuning"), any stage other than 4 (preheat, threshold voltage, per-chip tuning,
+// baseline), or a bosminer restart — the trim goes to 0 AT ONCE. A retune is then stopped: soft reset with the
+// level's known-good tune put back while bosminer is off (owner rule 2026-11-26), logged. The trim comes back
+// at the next stage-4 round (trimBack). Braiins can only tune well at the voltage it believes it sets; with our trim on, its
+// bootstrap fails (2026-11-26: 12 failed bootstraps in the morning, 3 more in the evening) and it saves a
+// degraded tune. A voltage jump up to stock is harmless; the 470 uF capacitor smooths it over ~2 s.
+func trimWatch() {
+	for {
+		time.Sleep(2 * time.Second)
+		if drv == nil || ccfg.Trim != "live" || setupRunning() || !idle() {
 			continue
 		}
-		n := math.Round(math.Max(0, math.Min(ccfg.TrimCap, cur+math.Max(-1, math.Min(1, err/0.12))))*100) / 100
-		if ccfg.Trim == "live" {
-			_ = setTrim(n)
-		} else {
-			note("trim (shadow): %.2f V vs %.2f -> %.2f %% (now %.2f)", r.volts, tv, n, cur)
+		cur := trimNow()
+		coreMu.Lock()
+		on := trimOnAt
+		coreMu.Unlock()
+		if cur <= 0 || on.IsZero() {
+			continue
 		}
+		stMu.Lock()
+		why := watchReason(tune.stage, tune.lastRetune, tune.restartAt, tune.retuneLine, on)
+		retune := tune.lastRetune.After(on)
+		stMu.Unlock()
+		if why == "" {
+			continue
+		}
+		trimOffNow()
+		coreMu.Lock()
+		targetV, trimOnAt, trimHeldAt = 0, time.Time{}, time.Now()
+		eff := effective
+		coreMu.Unlock()
+		note("trim watchdog: %s - trim %.1f %% -> 0 at once", why, cur)
+		if !retune {
+			continue // a restart / preheat: the trim comes back at the next stage-4 round (trimBack)
+		}
+		// Braiins is retuning under our trim: stop it, put the known-good tune back, restart bosminer (log only).
+		t := eff
+		if e, ok := ccfg.Levels[strconv.Itoa(eff)]; ok && e.T > 0 {
+			t = e.T
+		}
+		if !claimChange() {
+			note("trim watchdog: core busy - Braiins' retune not stopped")
+			continue
+		}
+		restored := 0
+		err := cleanApply(0, t, cleanOff, func() error {
+			n, err := restoreGoodTune(t)
+			restored = n
+			return err
+		})
+		setPhase("idle")
+		switch {
+		case err != nil:
+			note("trim watchdog: restoring the %d W tune failed: %v", t, err)
+		case restored == 0:
+			note("trim watchdog: no known-good tune for %d W - Braiins' new tune kept (trim back once it is in stage 4)", t)
+		default:
+			note("trim watchdog: Braiins' retune at %d W stopped, saved tune restored, bosminer restarted", t)
+		}
+		coreMu.Lock()
+		trimHeldAt = time.Now()
+		coreMu.Unlock()
 	}
 }
 
@@ -1059,6 +1172,8 @@ func setupCore(path string) {
 	http.HandleFunc("/api/wizard/chips", handleWizardChips)
 	go powerWorker()
 	go trimLoop()
+	initGoodTunes() // the known-good tune copies the watchdog restores from (profile.go)
+	go trimWatch()  // trim to 0 at once whenever Braiins leaves stage 4; a retune is stopped and the tune restored
 	go fanLoop()
 	go capLoop()
 	bt := 0
@@ -1075,4 +1190,18 @@ func setupCore(path string) {
 // ({"tunermode":{"target":{"powertarget":{"power_target":{"watt":2200}}}}}, verified on BOS+ 26.11).
 func parseModeTarget(raw json.RawMessage) int {
 	return int(num(raw, "tunermode", "target", "powertarget", "power_target", "watt"))
+}
+
+// watchReason: why the trim (on since on) must come off now, "" = it may stay. stage = Braiins' current tuner
+// stage (0 = unknown / just restarted), retune / restart = its last retune line and bosminer start.
+func watchReason(stage int, retune, restart time.Time, retuneLine string, on time.Time) string {
+	switch {
+	case restart.After(on):
+		return "bosminer restarted"
+	case retune.After(on):
+		return "Braiins is retuning (" + retuneLine + ")"
+	case stage != 0 && stage != 4:
+		return fmt.Sprintf("Braiins left stage 4 (now stage %d)", stage)
+	}
+	return ""
 }

@@ -31,7 +31,7 @@ func runDrive(t *testing.T, p *drivePlan, m lineModel, predV, knee float64) ([]f
 		} else {
 			minFail = math.Min(minFail, d)
 		}
-		nd, done := p.next(d, v, pass)
+		nd, done := p.next(d, v, pass, 1000-d, 0) // J/TH always improving with more drive: the bracket logic alone
 		if done {
 			if !p.HasPass {
 				return got, -1
@@ -71,12 +71,12 @@ func TestDrivePlanAsymmetry(t *testing.T) {
 	up, down := 0.2/0.07, 0.1/0.07
 	p := newPlan(m, gallopStep1)
 	d0 := p.first(m.driveAt(10.5))
-	nd, done := p.next(d0, m.volts(d0), false) // fail -> LESS drive by the whole step (0.20 V)
+	nd, done := p.next(d0, m.volts(d0), false, 10*(m.volts(d0)), 0) // fail -> LESS drive by the whole step (0.20 V)
 	if done || math.Abs((d0-nd)-up) > 0.011 {
 		t.Fatalf("after a fail: %.2f -> %.2f (want -%.2f)", d0, nd, up)
 	}
 	p = newPlan(m, gallopStep1)
-	nd, done = p.next(d0, m.volts(d0), true) // pass -> MORE drive by half the step (0.10 V)
+	nd, done = p.next(d0, m.volts(d0), true, 10*(m.volts(d0)), 0) // pass -> MORE drive by half the step (0.10 V)
 	if done || math.Abs((nd-d0)-down) > 0.011 {
 		t.Fatalf("after a pass: %.2f -> %.2f (want +%.2f)", d0, nd, down)
 	}
@@ -123,7 +123,7 @@ func TestDrivePlanBounds(t *testing.T) {
 	}
 	// a step whose MEAN voltage is already at the lowest allowed voltage caps the drive there
 	p = newPlan(m, gallopStep1)
-	if _, done := p.next(30, 8.95, true); !done || p.MaxD != 30 {
+	if _, done := p.next(30, 8.95, true, 10*(8.95), 0); !done || p.MaxD != 30 {
 		t.Fatalf("LowV cap: MaxD %.2f", p.MaxD)
 	}
 	// a monotone model that passes everywhere above 9.0 V must stop within maxSteps even with tiny steps
@@ -136,17 +136,17 @@ func TestDrivePlanBounds(t *testing.T) {
 func TestDrivePlanNoCross(t *testing.T) {
 	m := lineModel{11.8, 0.07}
 	p := newPlan(m, gallopStep1)
-	p.next(40, m.volts(40), false) // fail at 40 %
-	p.next(37.14, m.volts(37.14), true)
+	p.next(40, m.volts(40), false, 10*(m.volts(40)), 0) // fail at 40 %
+	p.next(37.14, m.volts(37.14), true, 10*(m.volts(37.14)), 0)
 	// bracket 37.14..40: next must be strictly inside
-	nd, done := p.next(38.57, m.volts(38.57), true)
+	nd, done := p.next(38.57, m.volts(38.57), true, 10*(m.volts(38.57)), 0)
 	if done || nd <= 38.57 || nd >= 40 {
 		t.Fatalf("inside the bracket: %.2f done %v", nd, done)
 	}
 	// a pass recorded at a drive that would put the next gallop past a failure: done, never at the failure
 	p = newPlan(m, gallopStep1)
 	p.Fail, p.HasFail = 40, true
-	if nd, done := p.next(39.9, m.volts(39.9), true); !done {
+	if nd, done := p.next(39.9, m.volts(39.9), true, 10*(m.volts(39.9)), 0); !done {
 		t.Fatalf("gap below resolution must end the search, got %.2f", nd)
 	}
 }
@@ -299,5 +299,49 @@ chip_hashrate{chip_addr="005",chip_in_domain="01",hashboard="2",type="error",vol
 	}
 	if r, src := chipRates("", "nothing", 1); r != nil || src != "" {
 		t.Fatal("no per-chip data")
+	}
+}
+
+// The efficiency edge (owner rules 2026-11-26), on a line model (0.07 V per drive %).
+func TestDrivePlanEdge(t *testing.T) {
+	m := lineModel{11.8, 0.07}
+	small := driveStep(m.driveAt, 10.0, edgeStep)
+	// weak chips spreading but J/TH still better: one small step down; that step worse -> one step up above the best
+	p := newPlan(m, gallopStep1)
+	d1 := 25.0
+	nd, done := p.next(d1, m.volts(d1), true, 24.0, 0)
+	if done {
+		t.Fatal("first pass must continue")
+	}
+	d2 := nd
+	nd, done = p.next(d2, m.volts(d2), true, 23.5, 3) // 3 new weak chips: the edge
+	if done || math.Abs(nd-r2(d2+small)) > 0.011 {
+		t.Fatalf("edge: want the small step down %.2f, got %.2f done %v", d2+small, nd, done)
+	}
+	d3 := nd
+	nd, done = p.next(d3, m.volts(d3), false, 0, 9) // the small step fails -> up above the best (d2)
+	if done || math.Abs(nd-r2(d2-small)) > 0.011 {
+		t.Fatalf("after a worse small step: want up to %.2f, got %.2f done %v", d2-small, nd, done)
+	}
+	if _, done = p.next(nd, m.volts(nd), true, 23.6, 1); !done {
+		t.Fatal("after the step up the search ends")
+	}
+	if p.BestD != d2 {
+		t.Fatalf("best J/TH pass is %.2f, want %.2f", p.BestD, d2)
+	}
+	// J/TH stops improving (no weak chips): straight to the step up above the best
+	p = newPlan(m, gallopStep1)
+	_, _ = p.next(25, m.volts(25), true, 24.0, 0)
+	nd, done = p.next(27, m.volts(27), true, 24.02, 0)
+	if done || math.Abs(nd-r2(25-small)) > 0.011 {
+		t.Fatalf("no improvement: want up to %.2f, got %.2f done %v", 25-small, nd, done)
+	}
+	// a small step that is still clearly better moves the edge on (search continues down)
+	p = newPlan(m, gallopStep1)
+	_, _ = p.next(25, m.volts(25), true, 24.0, 0)
+	nd, _ = p.next(27, m.volts(27), true, 23.5, 2)
+	nd2, done := p.next(nd, m.volts(nd), true, 23.0, 2)
+	if done || nd2 <= nd {
+		t.Fatalf("better small step: the search goes on down, got %.2f done %v", nd2, done)
 	}
 }

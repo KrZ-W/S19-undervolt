@@ -303,8 +303,97 @@ func lowerStoredHashrate() ([]string, error) {
 	}
 	lb, _ := json.Marshal(done)
 	_ = os.WriteFile(loweredTunesFile, lb, 0o600)
+	saveGoodTunes(boards)
 	sort.Strings(changed)
 	return changed, nil
+}
+
+// ---- known-good tunes (the trim watchdog's restore) ----
+//
+// goodTunesFile keeps a copy of every finished (stage-4) tune as it was when the levels were tuned and lowered
+// to 90 %. When Braiins retunes a level under the trim, the watchdog stops bosminer, puts that level's copy back
+// and restarts it (owner rule 2026-11-26: "stop it, restore the profile, restart bosminer, log it").
+
+var goodTunesFile = "/etc/s19volt/tunes-good.json"
+
+// saveGoodTunes stores the finished tunes of boards (key -> entry) as the known-good copies, replacing older
+// copies under the same key.
+func saveGoodTunes(boards map[string]interface{}) {
+	good := map[string]interface{}{}
+	if b, err := os.ReadFile(goodTunesFile); err == nil {
+		_ = json.Unmarshal(b, &good)
+	}
+	for k, v := range boards {
+		if dig(v, "stage", "S4", "multi_configuration") != nil {
+			good[k] = v
+		}
+	}
+	if out, err := json.Marshal(good); err == nil {
+		_ = os.WriteFile(goodTunesFile, out, 0o600)
+	}
+}
+
+// initGoodTunes: on start, when there is no known-good copy yet, the current finished tunes become it.
+func initGoodTunes() {
+	if _, err := os.Stat(goodTunesFile); err == nil {
+		return
+	}
+	b, err := os.ReadFile(autotuneFile)
+	if err != nil {
+		return
+	}
+	var doc map[string]interface{}
+	if json.Unmarshal(b, &doc) != nil {
+		return
+	}
+	boards, _ := doc["boards"].(map[string]interface{})
+	saveGoodTunes(boards)
+}
+
+// restoreGoodTune puts the known-good copies of power target t back into the tune file (backup first). Returns
+// how many entries were restored (0 = no copy for t). bosminer must be stopped.
+func restoreGoodTune(t int) (int, error) {
+	gb, err := os.ReadFile(goodTunesFile)
+	if err != nil {
+		return 0, err
+	}
+	good := map[string]interface{}{}
+	if err := json.Unmarshal(gb, &good); err != nil {
+		return 0, err
+	}
+	b, err := os.ReadFile(autotuneFile)
+	if err != nil {
+		return 0, err
+	}
+	var doc map[string]interface{}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return 0, err
+	}
+	boards, _ := doc["boards"].(map[string]interface{})
+	if boards == nil {
+		return 0, fmt.Errorf("tune file without boards")
+	}
+	n := 0
+	for k, v := range good {
+		pw, _ := dig(v, "profile_target", "Power").(float64)
+		if int(math.Round(pw)) == t {
+			boards[k] = v
+			n++
+		}
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	backupTunes(b)
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return 0, err
+	}
+	tmp := autotuneFile + ".tmp"
+	if err := os.WriteFile(tmp, out, 0o644); err != nil {
+		return 0, err
+	}
+	return n, os.Rename(tmp, autotuneFile)
 }
 
 // tunesPending: a saved tune not lowered to 90 % yet (read-only; bosminer may be running).

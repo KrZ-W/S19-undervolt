@@ -18,7 +18,12 @@ package main
 //	          [minDriveStep, maxDriveStep]
 //	bisect    between the most drive that passed and the least drive that failed until they are <= the drive
 //	          equivalent of bisectRes apart (or <= minDriveStep)
-//	no-cross  never a drive at or beyond a failed drive, never at or below a passed one once bracketed
+//	edge      (owner 2026-11-26) a pass with MORE newly weak chips than the pass before it (weak chips spreading),
+//	          or one that does not beat the best J/TH by jthEps, is the efficiency edge: one small step down
+//	          (edgeStep; still clearly better = the search goes on from there); worse -> one step UP above the best
+//	          pass; then done. Weak chips alone do not fail a step any more (stepPass: every board >= passBoard)
+//	no-cross  never a drive at or beyond a failed drive, never at or below a passed one once bracketed (except the
+//	          edge's one step up above the best pass)
 //	answer    the passing step with the best est. J/TH (answerStep, efficiency only): its drive AND its mean voltage
 //	resets    after a failing step the boards get a soft reset (cleanApply) before the next step (none after the last)
 //	latch     the check must test the ANSWER (wizard.go latchStart / latchVerdict): if the last step ran at or
@@ -40,7 +45,10 @@ import (
 const (
 	gallopStep1    = 0.20 // V per gallop step for the first level of a board set (converted to drive at the local slope)
 	gallopStepNext = 0.10 // V per gallop step when the prediction comes from a previous answer (within ~0.1 V)
-	bisectRes      = 0.05 // bisection ends when the bracket is this many volts of drive wide (or minDriveStep)
+	bisectRes      = 0.10 // bisection ends when the bracket is this many volts of drive wide (owner 2026-11-26: a
+	// pass and a fail 0.05 V apart is measurement noise; was 0.05)
+	edgeStep = 0.05 // V: at the edge, the one small step down; and the one step up above the best pass
+	jthEps   = 0.05 // J/TH: a pass "improves" only if it beats the best pass by more than this (estimate noise)
 	// A failed step costs the step plus a soft reset (~1.8x a passing step). Simulated over 20k random floors
 	// (+/-0.3 V and +/-0.15 V around the prediction): a SMALLER step down after a pass saves time (it avoids stepping
 	// into a failure); a BIGGER step up after a fail costs time (wider bracket = one more halving step).
@@ -92,6 +100,38 @@ type drivePlan struct {
 	HasFail    bool
 	LastV      float64 // the last measured mean voltage (where the slope is read)
 	N          int     // steps recorded
+	// efficiency edge (owner rules 2026-11-26): the edge is reached when a pass shows MORE newly weak chips than
+	// the pass before it (weak chips spreading) or does not improve the best J/TH. There: one small step down
+	// (edgeStep); if that is worse (fail or no better J/TH), one step UP above the best pass; then done.
+	BestJTH  float64 // best J/TH of the passes (valid when HasPass)
+	BestD    float64 // its drive
+	PrevWeak int     // newly weak chips of the last pass
+	Edge     bool    // the edge was reached
+	Small    bool    // the small step down was taken
+	Up       bool    // the step up above the best pass was taken
+	tried    []float64
+}
+
+func (p *drivePlan) triedNear(d float64) bool {
+	for _, x := range p.tried {
+		if math.Abs(x-d) < minDriveStep/2 {
+			return true
+		}
+	}
+	return false
+}
+
+// upProbe: one step above the best pass (less drive), unless taken, out of range or already measured.
+func (p *drivePlan) upProbe() (float64, bool) {
+	if p.Up || !p.HasPass {
+		return 0, true
+	}
+	p.Up = true
+	nd := r2(p.BestD - driveStep(p.DriveAt, p.LastV, edgeStep))
+	if nd < p.MinD || p.triedNear(nd) {
+		return 0, true
+	}
+	return nd, false
 }
 
 // first: the first step (the predicted voltage's drive, inside [MinD, MaxD]).
@@ -99,9 +139,18 @@ func (p *drivePlan) first(d float64) float64 { return r2(math.Max(p.MinD, math.M
 
 // next records the step at drive d (mean voltage v, 0 = unknown) and returns the next drive, or done. The answer is
 // p.Pass (when HasPass).
-func (p *drivePlan) next(d, v float64, pass bool) (float64, bool) {
+func (p *drivePlan) next(d, v float64, pass bool, jth float64, weak int) (float64, bool) {
 	const eps = 1e-6
 	p.N++
+	p.tried = append(p.tried, d)
+	hadPass, prevWeak := p.HasPass, p.PrevWeak
+	improved := pass && jth > 0 && (!hadPass || jth < p.BestJTH-jthEps)
+	if pass && jth > 0 && (!hadPass || jth < p.BestJTH) {
+		p.BestJTH, p.BestD = jth, d
+	}
+	if pass {
+		p.PrevWeak = weak
+	}
 	if pass {
 		if !p.HasPass || d > p.Pass {
 			p.Pass = d
@@ -121,6 +170,31 @@ func (p *drivePlan) next(d, v float64, pass bool) (float64, bool) {
 	}
 	if p.N >= maxSteps {
 		return 0, true
+	}
+	if v > 0 {
+		p.LastV = v
+	}
+	// the efficiency edge
+	switch {
+	case p.Edge && p.Small && !p.Up: // the small step down was just measured
+		if pass && improved { // still better: keep going down from it (the edge moves)
+			p.Edge, p.Small = false, false
+			break
+		}
+		return p.upProbe()
+	case p.Edge && p.Up: // the step up was just measured
+		return 0, true
+	case pass && hadPass && (weak > prevWeak || !improved): // a pass at the edge
+		p.Edge = true
+		if !improved { // J/TH stopped improving: the best is above, probe one step up
+			return p.upProbe()
+		}
+		p.Small = true // weak chips spreading, J/TH still better: one small step down
+		nd := r2(math.Min(p.MaxD, d+driveStep(p.DriveAt, p.LastV, edgeStep)))
+		if nd <= d+eps || (p.HasFail && nd >= p.Fail-eps) || p.triedNear(nd) {
+			return p.upProbe()
+		}
+		return nd, false
 	}
 	var nd float64
 	switch {

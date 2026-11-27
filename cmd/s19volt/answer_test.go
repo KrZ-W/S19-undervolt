@@ -8,25 +8,23 @@ import (
 	"time"
 )
 
-func TestStepPass96(t *testing.T) {
+func TestStepPassBoards(t *testing.T) {
 	for _, c := range []struct {
-		weak      int
-		ths, chip float64
-		want      bool
-		why       string
+		share, chip float64
+		want        bool
+		why         string
 	}{
-		{0, 96.0, 70, true, "exactly 96 %"},
-		{1, 99.0, 70, true, "one noise chip"},
-		{2, 99.0, 70, false, "two newly weak chips"},
-		{0, 95.9, 70, false, "below 96 % total"},
-		{0, 99.0, 80.5, false, "chips above target + 6"},
+		{0.90, 70, true, "lowest board exactly 90 %"},
+		{0.99, 70, true, "all boards fine (weak chips do not count any more)"},
+		{0.89, 70, false, "a board below 90 %"},
+		{0.99, 80.5, false, "chips above target + 6"},
 	} {
-		if got := stepPass(c.weak, c.ths, 100, c.chip, 74); got != c.want {
+		if got := stepPass(c.share, 70, c.chip, 74); got != c.want {
 			t.Errorf("%s: stepPass = %v", c.why, got)
 		}
 	}
-	if stepPass(0, 10, 0, 60, 74) {
-		t.Error("no baseline must never pass")
+	if stepPass(1, 0, 60, 74) {
+		t.Error("no hashrate must never pass")
 	}
 }
 
@@ -393,5 +391,20 @@ func TestParseModeTarget(t *testing.T) {
 	}
 	if w := parseModeTarget(json.RawMessage(`{"overall_tuner_state":1,"mode_state":null}`)); w != 0 {
 		t.Fatalf("got %d", w)
+	}
+}
+
+func TestBeatsStock(t *testing.T) {
+	if beatsStock(26.9, 26.4) {
+		t.Error("2000 W (26.9 vs 26.4 stock) must not beat stock")
+	}
+	if !beatsStock(22.9, 30.2) {
+		t.Error("600 W (22.9 vs 30.2) beats stock")
+	}
+	if beatsStock(26.5, 26.6) {
+		t.Error("0.4 % better is inside the 1 % margin: stock")
+	}
+	if !beatsStock(26.0, 0) {
+		t.Error("no stock figure: cannot tell, keep the trimmed answer")
 	}
 }

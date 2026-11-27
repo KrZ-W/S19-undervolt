@@ -423,7 +423,7 @@ func main() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 		<-sig
-		closeTrimDriver()  // glides toward 0 % for at most a minute, then forces the pin LOW
+		closeTrimDriver()  // trim to 0 % at once (pin LOW, stock voltage) before anything else
 		if !wizRunning() { // a run in progress keeps its test profile: the next start resumes it or, if no resume
 			leaveManual() // comes within restoreGrace, puts the tuner back (no tuner<->manual double switch on a deploy)
 		}

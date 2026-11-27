@@ -16,8 +16,11 @@ import (
 )
 
 const (
-	passTH       = 0.96 // step passes: total TH/s >= this share of the fresh tune's
-	passWeak     = 1    // step passes: at most this many chips newly weak vs the fresh tune (1 = noise chip)
+	passBoard = 0.90 // step passes: EVERY board's mcr (Braiins' per-chip hashrate vs the clocks, the measure its own
+	// stage-4 check uses) >= this. Braiins retunes ~3-4 points under its stored hashrate, set to 90 % before any
+	// trimmed step: ~86-87 %. (Owner 2026-11-26: a 22.4 J/TH step failed on a Diff1 per-board share of 91 % while
+	// its mcr was 97.1 %: Diff1 per board is +-3-6 % at 500-700 W, so it no longer decides.) Weak chips do not fail
+	// a step; they still mark the edge of the search (search.go).
 	chipHotMarg  = 6.0  // °C above the chip target that still counts as fine during a step
 	dropFr       = 0.60 // a board below this share of its stock rate during a hold aborts the hold
 	effConfirmTo = 1.03 // re-confirm after a clock change: J/TH may be at most 3 % worse than the answer's
@@ -35,9 +38,21 @@ type wizAnswer struct {
 	Step    int      `json:"step"` // index in the level's steps (the confirm hold)
 }
 
-// stepPass: the per-step rule (unchanged; was strictPass).
-func stepPass(newWeak int, ths, baseTHs, chip, chipTarget float64) bool {
-	return newWeak <= passWeak && baseTHs > 0 && ths >= passTH*baseTHs && chip <= chipTarget+chipHotMarg
+// stepPass: the per-step rule. minShare = the lowest board's share of its own stock rate. Weak chips are not part
+// of it (owner 2026-11-26): a step with a few weak chips that keeps every board >= passBoard passes. minShare =
+// the lowest board's mcr (its share of its stock rate when there is no per-chip data).
+func stepPass(minShare, ths, chip, chipTarget float64) bool {
+	return ths > 0 && minShare >= passBoard && chip <= chipTarget+chipHotMarg
+}
+
+// beatStockFr: a trimmed answer must be at least this much better (lower J/TH) than the level's stock baseline, or
+// the level runs at stock voltage (owner 2026-11-26: the tuned 2000 W ran 26.9 J/TH against 26.4 at stock — the
+// trim saved 1.8 % power and cost 3.7 % hashrate).
+const beatStockFr = 0.01
+
+// beatsStock: the trimmed J/TH is at least beatStockFr better than stock (no stock figure = cannot tell: true).
+func beatsStock(jth, stockJTH float64) bool {
+	return stockJTH <= 0 || (jth > 0 && jth <= stockJTH*(1-beatStockFr))
 }
 
 // usable: a measured step that may become an answer (not discarded by the profile guard, no board drop).

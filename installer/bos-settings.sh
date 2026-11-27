@@ -33,7 +33,10 @@ toml_get() {
 WANT='T|performance_scaling|enabled|false|Dynamic Performance Scaling would change the power target by itself
 T|autotuning|enabled|true|the wizard and the level table need Braiins tuner
 X||enable_continuous_tuning|false|Continuous Tuning would re-tune under the trim
-X||start_cooldown_mode|"disabled"|s19volt cools the boards itself before a restart; Braiins cooldown only adds minutes'
+X||start_cooldown_mode|"disabled"|s19volt cools the boards itself before a restart; Braiins cooldown only adds minutes
+X||min_fan_pwm_mode|"manual"|no fan stop + minimum-rpm measurement at every bosminer start
+X||min_fan_pwm|15|Braiins' minimum fan = s19volt's fan rule minimum (15 %), so pauses and restarts stay at 15 %
+T|fan_control|speed|15|bosminer starts the fans at this speed after every restart (was 25 %: an audible step up)'
 
 build() { # writes the corrected copies to /tmp; prints what differs
 	touch "$X" 2>/dev/null

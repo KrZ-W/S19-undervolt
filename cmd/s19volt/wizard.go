@@ -91,6 +91,23 @@ type wizCurve struct {
 	StockV float64    `json:"stock_v"`
 	Points []calPoint `json:"points"`
 	Status string     `json:"status"`
+	// Fit: the fitted curve (fitShape: monotone PCHIP through the averaged points) as [drive %, V] pairs for the
+	// page; filled only in API output (withFit), never saved
+	Fit [][2]float64 `json:"fit,omitempty"`
+}
+
+// withFit: a copy of c with its fitted curve sampled every 0.5 % (no fit = the copy without one).
+func withFit(c wizCurve) wizCurve {
+	if f, ok := fitShape(c.Points); ok {
+		lo, hi := 100.0, 0.0
+		for _, p := range c.Points {
+			lo, hi = math.Min(lo, p.Duty), math.Max(hi, p.Duty)
+		}
+		for d := lo; d <= hi+1e-9; d += 0.5 {
+			c.Fit = append(c.Fit, [2]float64{r2(d), math.Round(f.at(d)*1000) / 1000})
+		}
+	}
+	return c
 }
 
 // drivePt: one measured (load, board volts, drive %) point. Load = bosminer power target x clock factor (the
@@ -1909,7 +1926,14 @@ func (r *levelRun) judge(d float64, rates map[string]float64, th, chip, vm float
 			st.MCRTH = sharesTHs(lastChips)
 		}
 	}
-	st.Pass = stepPass(st.NewWeak, th, r.baseTH*r.scale, chip, r.in.ChipTarget)
+	minBoard := st.Share // the per-board check: Braiins' per-chip mcr per board (smooth, its own retune measure)
+	if len(st.MCRs) > 0 {
+		minBoard = 1
+		for _, m := range st.MCRs {
+			minBoard = math.Min(minBoard, m)
+		}
+	}
+	st.Pass = stepPass(minBoard, th, chip, r.in.ChipTarget)
 	st.Stable = st.Pass
 	return st
 }
@@ -2001,7 +2025,20 @@ func (r *levelRun) hold(d float64, short bool) (wizStep, error) {
 //
 // A "Setting voltage" before the hold (between steps, nothing measured) only waits for a settled round.
 func (r *levelRun) measure(d float64, short bool) (wizStep, error) {
+	lowered := false // one 90 % reset per step at most (a failed write must not loop resets)
 	for {
+		// A fresh Braiins tune (the level's first, or one Braiins made after retuning mid-level) gets its stored
+		// hashrate set to 90 % BEFORE any trimmed step: one soft reset, bosminer reads the file only at start.
+		// Right after a fresh tune Braiins retunes on a SINGLE failed stage-4 check (2026-11-26, 500 W: boards
+		// 98.0/95.4/96.2 % against 99.4/98.9/99.5 % at baseline during step 1 -> "profile failed, retuning").
+		if !lowered && tunesPending() {
+			lowered = true
+			r.live("setting the fresh %d W tune's stored hashrate to 90 %% (soft reset) before the step", r.t0)
+			if err := r.clean(nil); err != nil {
+				return wizStep{}, err
+			}
+			continue
+		}
 		set, retune := bosEventsSince(r.since)
 		if set != "" && retune == "" { // between steps: nothing measured, nothing to throw out
 			r.live("bosminer moved the voltage between steps - waiting for a settled stage-4 round")
@@ -2370,7 +2407,7 @@ func searchLevel(lv wizLevel, in wizInputs, curves []wizCurve, upd func(func(*wi
 				return l, err
 			}
 			wizEvent("step", "%d W: step %d: drive %.1f %% -> %s (%s)", lv.Watts, plan.N+1, d, vAvgText(st.V), map[bool]string{true: "pass", false: "fail"}[pass])
-			nd, done := plan.next(d, st.V, pass)
+			nd, done := plan.next(d, st.V, pass, st.JTH, st.NewWeak)
 			if done {
 				break // a failing last step keeps its state: the latch check may start from it (latchStart)
 			}
@@ -2390,6 +2427,11 @@ func searchLevel(lv wizLevel, in wizInputs, curves []wizCurve, upd func(func(*wi
 	ai := -1
 	if plan.HasPass {
 		ai = answerStep(l.Steps)
+	}
+	notBetter := false
+	if ai >= 0 && !beatsStock(l.Steps[ai].JTH, l.StockJT) { // the trim must pay: else the level runs at stock
+		note("wizard: %d W: best trimmed step %.2f J/TH does not beat stock %.2f J/TH by %.0f %% - stock voltage", lv.Watts, l.Steps[ai].JTH, l.StockJT, beatStockFr*100)
+		ai, notBetter = -1, true
 	}
 	for ai >= 0 {
 		l.Eff = r.answer(ai)
@@ -2452,6 +2494,8 @@ func searchLevel(lv wizLevel, in wizInputs, curves []wizCurve, upd func(func(*wi
 		l.Status, l.Answer = "done", "stock"
 		why := "no passing trimmed voltage"
 		switch {
+		case notBetter:
+			why = fmt.Sprintf("no trimmed step beat stock J/TH by %.0f %%", beatStockFr*100)
 		case len(l.LatchedAt) > 0:
 			l.Status, why = "unsafe", latchedAtNote(l.LatchedAt)
 		case l.Eff != nil && !l.LatchKnown:
@@ -2653,12 +2697,17 @@ func handleWizard(w http.ResponseWriter, r *http.Request) {
 		if s.Running && tv.Wait != "" { // waiting for Braiins: the live line says what Braiins is doing
 			s.Live = tv.Line
 		}
+		fc := make([]wizCurve, len(s.Curves)) // the sweep curves with their fitted line (a copy: never saved)
+		for i, c := range s.Curves {
+			fc[i] = withFit(c)
+		}
+		s.Curves = fc
 		out := map[string]interface{}{"state": s, "table": wizTable(s), "fits": driveFits(s), "phase": ph, "tuner": tv, "live_step": step,
 			"resume":   "",
 			"defaults": wizInputs{MinW: 500, MaxW: 2200, StepW: 100, MaxFan: 25, ChipTarget: 74},
 			"limits":   map[string]int{"min_fan": minFan, "two_board_below": twoBoardW, "one_board_below": oneBoardW}}
 		if c := calSnapshot(); c.Running && len(c.Points) > 0 { // the sweep in progress: the page draws it as it goes
-			out["sweep_live"] = wizCurve{Watts: c.Watts, StockV: c.StockV, Points: c.Points, Status: "running"}
+			out["sweep_live"] = withFit(wizCurve{Watts: c.Watts, StockV: c.StockV, Points: c.Points, Status: "running"})
 		}
 		if ok, _ := resumable(s); ok {
 			out["resume"] = resumeSummary(s)
